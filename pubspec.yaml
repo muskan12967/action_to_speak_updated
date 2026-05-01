@@ -5,7 +5,7 @@ publish_to: 'none'
 version: 1.0.0+1
 
 environment:
-  sdk: ">=3.0.0 <4.0.0"
+  sdk: "3.41.9"
 
 dependencies:
   flutter:
@@ -18,7 +18,7 @@ dependencies:
   video_player: ^2.8.2
   chewie: ^1.7.5
   image_picker: ^1.0.7
-  speech_to_text: ^7.0.0
+  speech_to_text: ^6.6.2
   camera: ^0.10.5
   flutter_tts: ^3.8.5
 
