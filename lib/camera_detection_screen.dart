@@ -40,8 +40,7 @@ void initState() {
   for (int y = 0; y < height; y++) {
     for (int x = 0; x < width; x++) {
       int pixel = plane.bytes[y * width + x];
-      converted.setPixelRgba(x, y, pixel, pixel, pixel);
-    }
+      converted.setPixelRgba(x, y, pixel, pixel, pixel, 255);    }
   }
 
   img.Image resized = img.copyResize(converted, width: 64, height: 64);
@@ -50,10 +49,11 @@ void initState() {
     List.generate(64, (x) {
       final p = resized.getPixel(x, y);
       return [
-        img.getRed(p) / 255.0,
-        img.getGreen(p) / 255.0,
-        img.getBlue(p) / 255.0,
-      ];
+      
+  p.r / 255.0,
+  p.g / 255.0,
+  p.b / 255.0,
+];
     })
   );
 
