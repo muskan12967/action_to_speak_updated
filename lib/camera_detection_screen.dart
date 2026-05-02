@@ -3,6 +3,8 @@ import 'package:camera/camera.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:tflite_flutter/tflite_flutter.dart';
 import 'package:image/image.dart' as img;
+import 'package:speech_to_text/speech_to_text.dart' as stt;
+import 'package:video_player/video_player.dart';
 
 class CameraDetectionScreen extends StatefulWidget {
   @override
@@ -14,249 +16,269 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   CameraController? controller;
   List<CameraDescription>? cameras;
 
-  String detectedText = "";
-  List<String> chatMessages = [];
-
-  FlutterTts flutterTts = FlutterTts();
   late Interpreter interpreter;
-List sequence = [];
+  FlutterTts tts = FlutterTts();
+  late stt.SpeechToText speech;
 
- @override
-void initState() {
-  super.initState();
-  loadModel();   
-  initCamera();
-  setupTTS();   
-}
-  Future processImage(CameraImage image) async {
+  List sequence = [];
+  String detectedText = "";
+  String lastSpoken = "";
 
-  int width = image.width;
-  int height = image.height;
+  bool isProcessing = false;
 
-  img.Image converted = img.Image(width: width, height: height);
+  final int SEQ_LEN = 20;
 
-  final plane = image.planes[0];
+  /// 🔥 ALL SIGNS MAP (SCALABLE)
+ final Map<String, String> signMap = {
+  "باپ": "assets/father.mp4",
+  "خاندان": "assets/family.mp4",
+  "دوست": "assets/friend.mp4",
+  "طالبِ علم": "assets/student.mp4",
+  "لکھنا": "assets/write.mp4",
+  "ماں": "assets/mother.mp4",
+  "پڑھنا": "assets/read.mp4",
+  "کتاب": "assets/book.mp4",
+  "گھر": "assets/home.mp4",
+};
+  late List<String> labels;
 
-  for (int y = 0; y < height; y++) {
-    for (int x = 0; x < width; x++) {
-      int pixel = plane.bytes[y * width + x];
-      converted.setPixelRgba(x, y, pixel, pixel, pixel, 255);    }
+  @override
+  void initState() {
+    super.initState();
+    speech = stt.SpeechToText();
+    labels = signMap.keys.toList();
+
+    loadModel();
+    initCamera();
+    initTTS();
   }
 
-  img.Image resized = img.copyResize(converted, width: 64, height: 64);
-
-  List frame = List.generate(64, (y) =>
-    List.generate(64, (x) {
-      final p = resized.getPixel(x, y);
-      return [
-      
-  p.r / 255.0,
-  p.g / 255.0,
-  p.b / 255.0,
-];
-    })
-  );
-
-  return frame;
-}
-  String runModel(List sequence) {
-
-  var input = [sequence];
-
-  var output = List.generate(1, (_) => List.filled(46, 0.0));
-
-  interpreter.run(input, output);
-
-  int index = output[0].indexOf(
-    output[0].reduce((a, b) => a > b ? a : b),
-  );
-
-  List<String> labels = [
-    "کتاب","دوست","باپ","خاندان","طالب علم",
-    "لکھنا","ماں","پڑھنا","گھر"
-  ];
-
-  return labels[index];
-}
-  Future setupTTS() async {
-  await flutterTts.setLanguage("ur-PK");   // Urdu
-  await flutterTts.setPitch(1.0);
-  await flutterTts.setSpeechRate(0.5);
-}
+  // ---------------- MODEL ----------------
   Future loadModel() async {
-  interpreter = await Interpreter.fromAsset('model.tflite');
-  print("Model Loaded");
-}
+    interpreter = await Interpreter.fromAsset('model.tflite');
+  }
 
-  Future<void> initCamera() async {
+  // ---------------- TTS ----------------
+  Future initTTS() async {
+    await tts.setLanguage("ur-PK");
+    await tts.setSpeechRate(0.5);
+  }
 
+  // ---------------- CAMERA ----------------
+  Future initCamera() async {
     cameras = await availableCameras();
 
-    final frontCamera = cameras!.firstWhere(
-            (camera) => camera.lensDirection == CameraLensDirection.front);
+    final cam = cameras!.firstWhere(
+      (c) => c.lensDirection == CameraLensDirection.front
+    );
 
     controller = CameraController(
-      frontCamera,
+      cam,
       ResolutionPreset.medium,
       enableAudio: false,
     );
 
     await controller!.initialize();
-
-    startDetection();
-
-    if (mounted) {
-      setState(() {});
-    }
+    startStream();
+    setState(() {});
   }
-  
 
-  /// Simulated AI detection (replace with real model)
-  bool isDetecting = false;
+  // ---------------- FRAME PROCESS ----------------
+  Future<List> processFrame(CameraImage image) async {
 
-  void startDetection() {
-    if (isDetecting) return;
+    final plane = image.planes[0];
 
-    isDetecting = true;
+    img.Image frame = img.Image(width: 64, height: 64);
 
-    controller!.startImageStream((CameraImage image) async{
-
-      
-
- if (sequence.length >= 20) return;
-
-    var frame = await processImage(image);
-
-    sequence.add(frame);
-
-    if (sequence.length == 20) {
-      String result = runModel(sequence);
-      sequence.clear();
-
-      if (result != detectedText && mounted) {
-        setState(() {
-          detectedText = result;
-        });
-        await flutterTts.speak(result);   
+    for (int y = 0; y < 64; y++) {
+      for (int x = 0; x < 64; x++) {
+        int pixel = plane.bytes[y * plane.bytesPerRow + x];
+        frame.setPixelRgba(x, y, pixel, pixel, pixel, 255);
       }
     }
-  });
-}
 
-    void sendMessage() async {
+    return List.generate(64, (y) =>
+      List.generate(64, (x) {
+        final p = frame.getPixel(x, y);
+        return [p.r/255.0, p.g/255.0, p.b/255.0];
+      })
+    );
+  }
 
-    if (detectedText.isNotEmpty) {
+  // ---------------- MODEL PREDICT ----------------
+  String predict(List seq) {
 
-      setState(() {
-        chatMessages.add(detectedText);
-      });
+    var input = [seq];
+    var output = List.generate(1, (_) => List.filled(labels.length, 0.0));
 
-      await flutterTts.speak(detectedText);
+    interpreter.run(input, output);
 
-      detectedText = "";
+    int idx = 0;
+    double maxVal = output[0][0];
+
+    for (int i = 0; i < output[0].length; i++) {
+      if (output[0][i] > maxVal) {
+        maxVal = output[0][i];
+        idx = i;
+      }
     }
+
+    return labels[idx];
+  }
+
+  // ---------------- CAMERA STREAM ----------------
+  void startStream() {
+    controller!.startImageStream((image) async {
+
+      if (isProcessing) return;
+      isProcessing = true;
+
+      var frame = await processFrame(image);
+
+      sequence.add(frame);
+      if (sequence.length > SEQ_LEN) sequence.removeAt(0);
+
+      if (sequence.length == SEQ_LEN) {
+
+        String result = predict(sequence);
+
+        if (result != detectedText) {
+          setState(() => detectedText = result);
+
+          /// 🔊 Voice
+          if (result != lastSpoken) {
+            await tts.speak(result);
+            lastSpoken = result;
+          }
+
+          /// 🎥 Play video
+          playVideo(signMap[result]!);
+        }
+      }
+
+      isProcessing = false;
+    });
+  }
+
+  // ---------------- MIC ----------------
+  void startListening() async {
+
+    bool available = await speech.initialize();
+
+    if (available) {
+      speech.listen(
+        localeId: "ur_PK",
+        onResult: (res) {
+
+          String text = res.recognizedWords;
+          setState(() => detectedText = text);
+
+          handleVoice(text);
+        },
+      );
+    }
+  }
+
+  // ---------------- VOICE COMMAND ----------------
+  void handleVoice(String text) {
+
+    for (var key in signMap.keys) {
+      if (text.contains(key)) {
+
+        playVideo(signMap[key]!);
+        tts.speak("یہ $key کا اشارہ ہے");
+        return;
+      }
+    }
+
+    tts.speak("سمجھ نہیں آیا");
+  }
+
+  // ---------------- VIDEO ----------------
+  void playVideo(String path) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => VideoScreen(path),
+      ),
+    );
+  }
+
+  // ---------------- UI ----------------
+  @override
+  Widget build(BuildContext context) {
+
+    if (controller == null || !controller!.value.isInitialized) {
+      return Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
+
+    return Scaffold(
+      appBar: AppBar(title: Text("Sign AI Assistant")),
+      body: Column(
+        children: [
+
+          Expanded(flex: 3, child: CameraPreview(controller!)),
+
+          Text("Detected: $detectedText", style: TextStyle(fontSize: 20)),
+
+          IconButton(
+            icon: Icon(Icons.mic, size: 40, color: Colors.green),
+            onPressed: startListening,
+          ),
+        ],
+      ),
+    );
   }
 
   @override
   void dispose() {
     controller?.dispose();
+    interpreter.close();
+    tts.stop();
     super.dispose();
+  }
+}
+
+// ---------------- VIDEO SCREEN ----------------
+class VideoScreen extends StatefulWidget {
+  final String path;
+  VideoScreen(this.path);
+
+  @override
+  _VideoScreenState createState() => _VideoScreenState();
+}
+
+class _VideoScreenState extends State<VideoScreen> {
+
+  late VideoPlayerController controller;
+
+  @override
+  void initState() {
+    super.initState();
+    controller = VideoPlayerController.asset(widget.path)
+      ..initialize().then((_) {
+        controller.play();
+        setState(() {});
+      });
   }
 
   @override
   Widget build(BuildContext context) {
-
-    if (controller == null || !controller!.value.isInitialized) {
-      return Scaffold(
-        body: Center(child: CircularProgressIndicator()),
-      );
-    }
-
     return Scaffold(
-
-      appBar: AppBar(
-        title: Text("Live Sign Detection"),
-        backgroundColor: Color(0xFF2563EB),
-      ),
-
-      body: Column(
-        children: [
-
-          /// CAMERA PREVIEW
-          Container(
-            height: 300,
-            child: CameraPreview(controller!),
-          ),
-
-          /// DETECTED TEXT
-          Container(
-            padding: EdgeInsets.all(10),
-            child: Text(
-              "Detected: $detectedText",
-              style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-            ),
-          ),
-
-          /// CHAT AREA
-          Expanded(
-            child: ListView.builder(
-              itemCount: chatMessages.length,
-              itemBuilder: (context, index) {
-
-                return Align(
-                  alignment: Alignment.centerRight,
-                  child: Container(
-                    margin: EdgeInsets.all(10),
-                    padding: EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: Colors.blue,
-                      borderRadius: BorderRadius.circular(15),
-                    ),
-                    child: Text(
-                      chatMessages[index],
-                      style: TextStyle(color: Colors.white),
-                    ),
-                  ),
-                );
-              },
-            ),
-          ),
-
-          /// CONTROL BAR
-          Container(
-            color: Colors.grey[200],
-            padding: EdgeInsets.symmetric(horizontal: 10),
-            child: Row(
-              children: [
-
-                /// CAMERA ICON
-                IconButton(
-                  icon: Icon(Icons.camera_alt, color: Colors.blue),
-                  onPressed: () {},
-                ),
-
-                /// MIC ICON
-                IconButton(
-                  icon: Icon(Icons.mic, color: Colors.green),
-                  onPressed: () {
-                    // speech to text can go here
-                  },
-                ),
-
-                Spacer(),
-
-                /// SEND BUTTON
-                IconButton(
-                  icon: Icon(Icons.send, color: Colors.blue),
-                  onPressed: sendMessage,
-                ),
-
-              ],
-            ),
-          )
-
-        ],
+      body: Center(
+        child: controller.value.isInitialized
+            ? AspectRatio(
+                aspectRatio: controller.value.aspectRatio,
+                child: VideoPlayer(controller),
+              )
+            : CircularProgressIndicator(),
       ),
     );
+  }
+
+  @override
+  void dispose() {
+    controller.dispose();
+    super.dispose();
   }
 }
