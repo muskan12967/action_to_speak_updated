@@ -12,7 +12,6 @@ dependencies:
     sdk: flutter
 
   cupertino_icons: ^1.0.8
-
   permission_handler: ^11.3.0
   lottie: ^3.0.0
   video_player: ^2.8.2
@@ -22,14 +21,11 @@ dependencies:
   speech_to_text: ^6.6.2
   camera: ^0.10.5
   flutter_tts: ^3.8.5
-
-  #  AI MODEL (IMPORTANT)
   tflite_flutter: ^0.12.0
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
-
   flutter_lints: ^3.0.0
 
 flutter:
@@ -38,8 +34,6 @@ flutter:
   assets:
     - assets/logo.png
     - assets/model.tflite
-    flutter:
-  assets:
     - assets/videos/book.mp4
     - assets/videos/friend.mp4
     - assets/videos/father.mp4
