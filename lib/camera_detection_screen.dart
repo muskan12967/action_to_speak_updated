@@ -18,12 +18,75 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   List<String> chatMessages = [];
 
   FlutterTts flutterTts = FlutterTts();
+  late Interpreter interpreter;
+List sequence = [];
 
-  @override
-  void initState() {
-    super.initState();
-    initCamera();
+ @override
+void initState() {
+  super.initState();
+  loadModel();   
+  initCamera();
+  setupTTS();   
+}
+  Future processImage(CameraImage image) async {
+
+  int width = image.width;
+  int height = image.height;
+
+  img.Image converted = img.Image(width: width, height: height);
+
+  final plane = image.planes[0];
+
+  for (int y = 0; y < height; y++) {
+    for (int x = 0; x < width; x++) {
+      int pixel = plane.bytes[y * width + x];
+      converted.setPixelRgba(x, y, pixel, pixel, pixel);
+    }
   }
+
+  img.Image resized = img.copyResize(converted, width: 64, height: 64);
+
+  List frame = List.generate(64, (y) =>
+    List.generate(64, (x) {
+      final p = resized.getPixel(x, y);
+      return [
+        img.getRed(p) / 255.0,
+        img.getGreen(p) / 255.0,
+        img.getBlue(p) / 255.0,
+      ];
+    })
+  );
+
+  return frame;
+}
+  String runModel(List sequence) {
+
+  var input = [sequence];
+
+  var output = List.generate(1, (_) => List.filled(46, 0.0));
+
+  interpreter.run(input, output);
+
+  int index = output[0].indexOf(
+    output[0].reduce((a, b) => a > b ? a : b),
+  );
+
+  List<String> labels = [
+    "کتاب","دوست","باپ","خاندان","طالب علم",
+    "لکھنا","ماں","پڑھنا","گھر"
+  ];
+
+  return labels[index];
+}
+  Future setupTTS() async {
+  await flutterTts.setLanguage("ur-PK");   // Urdu
+  await flutterTts.setPitch(1.0);
+  await flutterTts.setSpeechRate(0.5);
+}
+  Future loadModel() async {
+  interpreter = await Interpreter.fromAsset('model.tflite');
+  print("Model Loaded");
+}
 
   Future<void> initCamera() async {
 
@@ -46,6 +109,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
       setState(() {});
     }
   }
+  
 
   /// Simulated AI detection (replace with real model)
   bool isDetecting = false;
@@ -55,26 +119,31 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
 
     isDetecting = true;
 
-    controller!.startImageStream((CameraImage image) {
-      String result = detectSign(image);
+    controller!.startImageStream((CameraImage image) async{
+
+      
+
+ if (sequence.length >= 20) return;
+
+    var frame = await processImage(image);
+
+    sequence.add(frame);
+
+    if (sequence.length == 20) {
+      String result = runModel(sequence);
+      sequence.clear();
 
       if (result != detectedText && mounted) {
         setState(() {
           detectedText = result;
         });
+        await flutterTts.speak(result);   
       }
-    });
-  }
+    }
+  });
+}
 
-  /// Placeholder for AI model
-  String detectSign(CameraImage image) {
-
-    // Later connect TFLite model here
-
-    return "Hello";
-  }
-
-  void sendMessage() async {
+    void sendMessage() async {
 
     if (detectedText.isNotEmpty) {
 
