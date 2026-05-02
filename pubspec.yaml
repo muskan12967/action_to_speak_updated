@@ -38,6 +38,8 @@ flutter:
   assets:
     - assets/logo.png
     - assets/model.tflite
+    flutter:
+  assets:
     - assets/videos/book.mp4
     - assets/videos/friend.mp4
     - assets/videos/father.mp4
