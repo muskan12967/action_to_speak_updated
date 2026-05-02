@@ -30,41 +30,41 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
 
   /// 🔥 ALL SIGNS MAP (SCALABLE)
  final Map<String, Map<String, String>> signMap = {
-  "book": {
-    "urdu": "کتاب",
-    "video": "assets/book.mp4"
-  },
-  "friend": {
-    "urdu": "دوست",
-    "video": "assets/friend.mp4"
-  },
   "father": {
     "urdu": "باپ",
-    "video": "assets/father.mp4"
+    "video": "assets/videos/father.mp4"
   },
   "family": {
     "urdu": "خاندان",
-    "video": "assets/family.mp4"
+    "video": "assets/videos/family.mp4"
+  },
+  "friend": {
+    "urdu": "دوست",
+    "video": "assets/videos/friend.mp4"
   },
   "student": {
-    "urdu": "طالب علم",
-    "video": "assets/student.mp4"
+    "urdu": "طالبِ علم",
+    "video": "assets/videos/student.mp4"
   },
   "write": {
     "urdu": "لکھنا",
-    "video": "assets/write.mp4"
+    "video": "assets/videos/write.mp4"
   },
   "mother": {
     "urdu": "ماں",
-    "video": "assets/mother.mp4"
+    "video": "assets/videos/mother.mp4"
   },
   "read": {
     "urdu": "پڑھنا",
-    "video": "assets/read.mp4"
+    "video": "assets/videos/read.mp4"
+  },
+  "book": {
+    "urdu": "کتاب",
+    "video": "assets/videos/book.mp4"
   },
   "home": {
     "urdu": "گھر",
-    "video": "assets/home.mp4"
+    "video": "assets/videos/home.mp4"
   },
 };
   late List<String> labels;
