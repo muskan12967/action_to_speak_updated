@@ -29,16 +29,43 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   final int SEQ_LEN = 20;
 
   /// 🔥 ALL SIGNS MAP (SCALABLE)
- final Map<String, String> signMap = {
-  "باپ": "assets/father.mp4",
-  "خاندان": "assets/family.mp4",
-  "دوست": "assets/friend.mp4",
-  "طالبِ علم": "assets/student.mp4",
-  "لکھنا": "assets/write.mp4",
-  "ماں": "assets/mother.mp4",
-  "پڑھنا": "assets/read.mp4",
-  "کتاب": "assets/book.mp4",
-  "گھر": "assets/home.mp4",
+ final Map<String, Map<String, String>> signMap = {
+  "book": {
+    "urdu": "کتاب",
+    "video": "assets/book.mp4"
+  },
+  "friend": {
+    "urdu": "دوست",
+    "video": "assets/friend.mp4"
+  },
+  "father": {
+    "urdu": "باپ",
+    "video": "assets/father.mp4"
+  },
+  "family": {
+    "urdu": "خاندان",
+    "video": "assets/family.mp4"
+  },
+  "student": {
+    "urdu": "طالب علم",
+    "video": "assets/student.mp4"
+  },
+  "write": {
+    "urdu": "لکھنا",
+    "video": "assets/write.mp4"
+  },
+  "mother": {
+    "urdu": "ماں",
+    "video": "assets/mother.mp4"
+  },
+  "read": {
+    "urdu": "پڑھنا",
+    "video": "assets/read.mp4"
+  },
+  "home": {
+    "urdu": "گھر",
+    "video": "assets/home.mp4"
+  },
 };
   late List<String> labels;
 
