@@ -38,12 +38,12 @@ flutter:
   assets:
     - assets/logo.png
     - assets/model.tflite
-    - assets/book.mp4
-    - assets/friend.mp4
-    - assets/father.mp4
-    - assets/family.mp4
-    - assets/student.mp4
-    - assets/write.mp4
-    - assets/mother.mp4
-    - assets/read.mp4
-    - assets/home.mp4
+    - assets/videos/book.mp4
+    - assets/videos/friend.mp4
+    - assets/videos/father.mp4
+    - assets/videos/family.mp4
+    - assets/videos/student.mp4
+    - assets/videos/write.mp4
+    - assets/videos/mother.mp4
+    - assets/videos/read.mp4
+    - assets/videos/home.mp4
