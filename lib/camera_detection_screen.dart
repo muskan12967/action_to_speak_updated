@@ -165,10 +165,14 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
       sequence.add(frame);
       if (sequence.length > SEQ_LEN) sequence.removeAt(0);
 
-      if (sequence.length == SEQ_LEN) {
+     if (sequence.length == SEQ_LEN) {
 
-        String result = predict(sequence);
+  String result = predict(sequence);
 
+  if (signMap.containsKey(result)) {
+    playVideo(signMap[result]!["video"]!);
+  }
+}
         if (result != detectedText) {
           setState(() => detectedText = result);
 
@@ -179,7 +183,8 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
           }
 
           /// 🎥 Play video
-          playVideo(signMap[result]!);
+          playVideo(signMap[result]!["video"]!);
+          playVideo(signMap[key]!["video"]!);
         }
       }
 
@@ -212,7 +217,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     for (var key in signMap.keys) {
       if (text.contains(key)) {
 
-        playVideo(signMap[key]!);
+        playVideo(signMap[key]!["video"]!);
         tts.speak("یہ $key کا اشارہ ہے");
         return;
       }
