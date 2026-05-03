@@ -31,7 +31,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
 
   final int SEQ_LEN = 20;
 
-  // ✅ URDU LABELS (MATCH TRAINING)
+  //  URDU LABELS 
   final List<String> labels = [
     'باپ',
     'خاندان',
@@ -44,7 +44,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     'گھر'
   ];
 
-  // ✅ URDU → VIDEO MAP
+  //  URDU → VIDEO MAP
   final Map<String, String> signMap = {
     "باپ": "assets/videos/father.mp4",
     "خاندان": "assets/videos/family.mp4",
@@ -68,18 +68,18 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     initTTS();
   }
 
-  // ---------------- MODEL ----------------
+  //  MODEL 
   Future loadModel() async {
     interpreter = await Interpreter.fromAsset('model.tflite');
   }
 
-  // ---------------- TTS ----------------
+  //  TTS
   Future initTTS() async {
     await tts.setLanguage("ur-PK");
     await tts.setSpeechRate(0.5);
   }
 
-  // ---------------- CAMERA ----------------
+  //  CAMERA
   Future initCamera() async {
     cameras = await availableCameras();
 
@@ -99,7 +99,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     setState(() {});
   }
 
-  // ---------------- FRAME PROCESSING (FIXED SIZE) ----------------
+  //  FRAME PROCESSING (FIXED SIZE) 
   Future<List> processFrame(CameraImage image) async {
 
     final plane = image.planes[0];
@@ -122,7 +122,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     );
   }
 
-  // ---------------- PREDICT ----------------
+  //  PREDICT 
   String predict(List seq) {
 
     var input = [seq];
@@ -145,7 +145,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     return labels[idx];
   }
 
-  // ---------------- STREAM ----------------
+  //  STREAM 
   void startStream() {
     controller!.startImageStream((image) async {
 
@@ -197,7 +197,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     });
   }
 
-  // ---------------- MIC ----------------
+  //  MIC 
   void startListening() async {
 
     bool available = await speech.initialize();
@@ -217,7 +217,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     }
   }
 
-  // ---------------- VOICE COMMAND ----------------
+  // VOICE COMMAND 
   void handleVoice(String text) {
 
     for (var key in signMap.keys) {
@@ -233,7 +233,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     tts.speak("سمجھ نہیں آیا");
   }
 
-  // ---------------- VIDEO ----------------
+  //  VIDEO 
   void playVideo(String path) {
     Navigator.push(
       context,
@@ -243,7 +243,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     );
   }
 
-  // ---------------- UI ----------------
+  // UI 
   @override
   Widget build(BuildContext context) {
 
@@ -287,7 +287,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   }
 }
 
-// ---------------- VIDEO SCREEN ----------------
+//  VIDEO SCREEN 
 class VideoScreen extends StatefulWidget {
   final String path;
   VideoScreen(this.path);
