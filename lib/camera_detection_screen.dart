@@ -25,30 +25,43 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   String lastSpoken = "";
 
   bool isProcessing = false;
+  bool isVideoPlaying = false;
+
+  int frameCount = 0;
 
   final int SEQ_LEN = 20;
 
-  // 🔥 SIGN MAP (FIXED)
-  final Map<String, Map<String, String>> signMap = {
-    "father": {"urdu": "باپ", "video": "assets/videos/father.mp4"},
-    "family": {"urdu": "خاندان", "video": "assets/videos/family.mp4"},
-    "friend": {"urdu": "دوست", "video": "assets/videos/friend.mp4"},
-    "student": {"urdu": "طالبِ علم", "video": "assets/videos/student.mp4"},
-    "write": {"urdu": "لکھنا", "video": "assets/videos/write.mp4"},
-    "mother": {"urdu": "ماں", "video": "assets/videos/mother.mp4"},
-    "read": {"urdu": "پڑھنا", "video": "assets/videos/read.mp4"},
-    "book": {"urdu": "کتاب", "video": "assets/videos/book.mp4"},
-    "home": {"urdu": "گھر", "video": "assets/videos/home.mp4"},
-  };
+  // ✅ URDU LABELS (MATCH TRAINING)
+  final List<String> labels = [
+    'باپ',
+    'خاندان',
+    'دوست',
+    'طالبِ علم',
+    'لکھنا',
+    'ماں',
+    'پڑھنا',
+    'کتاب',
+    'گھر'
+  ];
 
-  late List<String> labels;
+  // ✅ URDU → VIDEO MAP
+  final Map<String, String> signMap = {
+    "باپ": "assets/videos/father.mp4",
+    "خاندان": "assets/videos/family.mp4",
+    "دوست": "assets/videos/friend.mp4",
+    "طالبِ علم": "assets/videos/student.mp4",
+    "لکھنا": "assets/videos/write.mp4",
+    "ماں": "assets/videos/mother.mp4",
+    "پڑھنا": "assets/videos/read.mp4",
+    "کتاب": "assets/videos/book.mp4",
+    "گھر": "assets/videos/home.mp4",
+  };
 
   @override
   void initState() {
     super.initState();
 
     speech = stt.SpeechToText();
-    labels = signMap.keys.toList();
 
     loadModel();
     initCamera();
@@ -86,21 +99,23 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     setState(() {});
   }
 
-  // ---------------- FRAME ----------------
+  // ---------------- FRAME PROCESSING (FIXED SIZE) ----------------
   Future<List> processFrame(CameraImage image) async {
 
     final plane = image.planes[0];
-    img.Image frame = img.Image(width: 64, height: 64);
+    int size = 160;
 
-    for (int y = 0; y < 64; y++) {
-      for (int x = 0; x < 64; x++) {
+    img.Image frame = img.Image(width: size, height: size);
+
+    for (int y = 0; y < size; y++) {
+      for (int x = 0; x < size; x++) {
         int pixel = plane.bytes[y * plane.bytesPerRow + x];
         frame.setPixelRgba(x, y, pixel, pixel, pixel, 255);
       }
     }
 
-    return List.generate(64, (y) =>
-      List.generate(64, (x) {
+    return List.generate(size, (y) =>
+      List.generate(size, (x) {
         final p = frame.getPixel(x, y);
         return [p.r / 255.0, p.g / 255.0, p.b / 255.0];
       })
@@ -125,10 +140,12 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
       }
     }
 
+    if (maxVal < 0.4) return "unknown";
+
     return labels[idx];
   }
 
-  // ---------------- STREAM (FIXED) ----------------
+  // ---------------- STREAM ----------------
   void startStream() {
     controller!.startImageStream((image) async {
 
@@ -143,27 +160,36 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
         sequence.removeAt(0);
       }
 
-      if (sequence.length == SEQ_LEN) {
+      frameCount++;
+
+      if (sequence.length == SEQ_LEN && frameCount % 10 == 0) {
 
         String result = predict(sequence);
 
-        if (signMap.containsKey(result)) {
+        if (result != "unknown" && signMap.containsKey(result)) {
 
-          String video = signMap[result]!["video"]!;
-          String urdu = signMap[result]!["urdu"]!;
+          String video = signMap[result]!;
 
           if (result != detectedText) {
             setState(() {
-              detectedText = urdu;
+              detectedText = result;
             });
           }
 
           if (result != lastSpoken) {
-            await tts.speak(urdu);
+            await tts.speak(result);
             lastSpoken = result;
           }
 
-          playVideo(video);
+          if (!isVideoPlaying) {
+            isVideoPlaying = true;
+
+            playVideo(video);
+
+            Future.delayed(Duration(seconds: 2), () {
+              isVideoPlaying = false;
+            });
+          }
         }
       }
 
@@ -191,15 +217,15 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     }
   }
 
-  // ---------------- VOICE ----------------
+  // ---------------- VOICE COMMAND ----------------
   void handleVoice(String text) {
 
     for (var key in signMap.keys) {
 
-      if (text.contains(signMap[key]!["urdu"]!)) {
+      if (text.contains(key)) {
 
-        playVideo(signMap[key]!["video"]!);
-        tts.speak("یہ ${signMap[key]!["urdu"]} کا اشارہ ہے");
+        playVideo(signMap[key]!);
+        tts.speak("یہ $key کا اشارہ ہے");
         return;
       }
     }
