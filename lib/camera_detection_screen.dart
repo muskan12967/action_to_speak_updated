@@ -1,3 +1,6 @@
+
+import 'dart:typed_data';
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
 import 'package:flutter_tts/flutter_tts.dart';
@@ -6,7 +9,7 @@ import 'package:tflite_flutter/tflite_flutter.dart';
 import 'package:video_player/video_player.dart';
 import 'package:google_mlkit_pose_detection/google_mlkit_pose_detection.dart';
 import 'package:google_mlkit_commons/google_mlkit_commons.dart';
-import 'dart:typed_data';
+
 
 class CameraDetectionScreen extends StatefulWidget {
   @override
@@ -113,25 +116,30 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   }
 
   // ================= INPUT IMAGE =================
-  InputImage inputImageFromCamera(CameraImage image, CameraDescription cam) {
+ InputImage inputImageFromCamera(
+  CameraImage image,
+  CameraDescription camera,
+) {
+  final WriteBuffer allBytes = WriteBuffer();
 
-final bytes = image.planes.map((p) => p.bytes).expand((x) => x).toList();
-    for (final plane in image.planes) {
-      buffer.putUint8List(plane.bytes);
-    }
-
-    final bytes = buffer.done().buffer.asUint8List();
-
-    return InputImage.fromBytes(
-      bytes: bytes,
-      metadata: InputImageMetadata(
-        size: Size(image.width.toDouble(), image.height.toDouble()),
-        rotation: InputImageRotation.rotation0deg,
-        format: InputImageFormat.nv21,
-        bytesPerRow: image.planes[0].bytesPerRow,
-      ),
-    );
+  for (final plane in image.planes) {
+    allBytes.putUint8List(plane.bytes);
   }
+
+  final Uint8List bytes = allBytes.done().buffer.asUint8List();
+
+  return InputImage.fromBytes(
+    bytes: bytes,
+    metadata: InputImageMetadata(
+      size: Size(image.width.toDouble(), image.height.toDouble()),
+      rotation: InputImageRotationValue.fromRawValue(camera.sensorOrientation) ??
+          InputImageRotation.rotation0deg,
+      format: InputImageFormatValue.fromRawValue(image.format.raw) ??
+          InputImageFormat.nv21,
+      bytesPerRow: image.planes[0].bytesPerRow,
+    ),
+  );
+}
 
   // ================= LANDMARKS =================
   Future<List<double>> extractLandmarks(InputImage image) async {
