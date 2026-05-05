@@ -336,14 +336,46 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
 }
 
 // ================= VIDEO =================
-class VideoScreen extends StatelessWidget {
+class VideoScreen extends StatefulWidget {
   final String path;
   VideoScreen(this.path);
 
   @override
+  State<VideoScreen> createState() => _VideoScreenState();
+}
+
+class _VideoScreenState extends State<VideoScreen> {
+  late VideoPlayerController controller;
+
+  @override
+  void initState() {
+    super.initState();
+
+    controller = VideoPlayerController.asset(widget.path)
+      ..initialize().then((_) {
+        setState(() {});
+        controller.play();
+      });
+  }
+
+  @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: Center(child: Text("Playing: $path")),
+      backgroundColor: Colors.black,
+      body: Center(
+        child: controller.value.isInitialized
+            ? AspectRatio(
+                aspectRatio: controller.value.aspectRatio,
+                child: VideoPlayer(controller),
+              )
+            : CircularProgressIndicator(),
+      ),
     );
+  }
+
+  @override
+  void dispose() {
+    controller.dispose();
+    super.dispose();
   }
 }
