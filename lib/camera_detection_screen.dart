@@ -6,6 +6,8 @@ import 'package:tflite_flutter/tflite_flutter.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 import 'package:video_player/video_player.dart';
 import 'package:google_mlkit_pose_detection/google_mlkit_pose_detection.dart';
+import 'dart:typed_data';
+import 'package:flutter/foundation.dart'; // 🔥 IMPORTANT
 
 class CameraDetectionScreen extends StatefulWidget {
   @override
@@ -99,70 +101,59 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
 
     setState(() {});
   }
-
   // ---------------- IMAGE CONVERT ----------------
-  InputImage inputImageFromCamera(CameraImage image) {
+InputImage inputImageFromCamera(CameraImage image) {
 
-    final allBytes = WriteBuffer();
-    for (Plane plane in image.planes) {
-      allBytes.putUint8List(plane.bytes);
-    }
+  final bytes = image.planes[0].bytes;
 
-    final bytes = allBytes.done().buffer.asUint8List();
+  final inputImage = InputImage.fromBytes(
+    bytes: bytes,
+    metadata: InputImageMetadata(
+      size: Size(image.width.toDouble(), image.height.toDouble()),
+      rotation: InputImageRotation.rotation0deg,
+      format: InputImageFormat.yuv420,
+      bytesPerRow: image.planes[0].bytesPerRow,
+    ),
+  );
 
-    return InputImage.fromBytes(
-      bytes: bytes,
-      inputImageData: InputImageData(
-        size: Size(image.width.toDouble(), image.height.toDouble()),
-        imageRotation: InputImageRotation.rotation0deg,
-        inputImageFormat: InputImageFormat.yuv420,
-        planeData: image.planes.map(
-          (plane) => InputImagePlaneMetadata(
-            bytesPerRow: plane.bytesPerRow,
-            height: plane.height,
-            width: plane.width,
-          ),
-        ).toList(),
-      ),
-    );
-  }
+  return inputImage;
+}
 
   // ---------------- LANDMARKS ----------------
-  Future<List<double>> extractLandmarks(CameraImage image) async {
+ Future<List<double>> extractLandmarks(CameraImage image) async {
 
-    final inputImage = inputImageFromCamera(image);
+  final inputImage = inputImageFromCamera(image); // ✅ USE HERE
 
-    final poses = await poseDetector.processImage(inputImage);
+  final poses = await poseDetector.processImage(inputImage);
 
-    if (poses.isEmpty) {
-      return List.filled(63, 0.0);
-    }
-
-    final pose = poses.first;
-
-    final points = [
-      pose.landmarks[PoseLandmarkType.leftWrist],
-      pose.landmarks[PoseLandmarkType.leftElbow],
-      pose.landmarks[PoseLandmarkType.leftShoulder],
-    ];
-
-    List<double> data = [];
-
-    for (var p in points) {
-      if (p != null) {
-        data.addAll([p.x, p.y, 0.0]);
-      } else {
-        data.addAll([0.0, 0.0, 0.0]);
-      }
-    }
-
-    while (data.length < 63) {
-      data.add(0.0);
-    }
-
-    return data;
+  if (poses.isEmpty) {
+    return List.filled(63, 0.0);
   }
 
+  final pose = poses.first;
+
+  final points = [
+    pose.landmarks[PoseLandmarkType.leftWrist],
+    pose.landmarks[PoseLandmarkType.leftElbow],
+    pose.landmarks[PoseLandmarkType.leftShoulder],
+  ];
+
+  List<double> data = [];
+
+  for (var p in points) {
+    if (p != null) {
+      data.addAll([p.x, p.y, 0.0]);
+    } else {
+      data.addAll([0.0, 0.0, 0.0]);
+    }
+  }
+
+  while (data.length < 63) {
+    data.add(0.0);
+  }
+
+  return data;
+}
   // ---------------- PREDICT ----------------
   String predict(List<List<double>> seq) {
 
