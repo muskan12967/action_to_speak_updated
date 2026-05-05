@@ -1,5 +1,5 @@
 import 'dart:typed_data';
-import 'dart:ui'; // ✅ FIX HERE
+import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
 import 'package:flutter_tts/flutter_tts.dart';
@@ -86,7 +86,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   // ✅ FIXED INPUT IMAGE (NO ERRORS)
   InputImage inputImageFromCamera(CameraImage image, CameraDescription camera) {
 
-    final WriteBuffer allBytes = WriteBuffer();
+    final ui.WriteBuffer allBytes = ui.WriteBuffer();
 
     for (final plane in image.planes) {
       allBytes.putUint8List(plane.bytes);
