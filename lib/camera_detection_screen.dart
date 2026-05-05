@@ -115,8 +115,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   // ================= INPUT IMAGE =================
   InputImage inputImageFromCamera(CameraImage image, CameraDescription cam) {
 
-    final WriteBuffer buffer = WriteBuffer();
-
+final bytes = image.planes.map((p) => p.bytes).expand((x) => x).toList();
     for (final plane in image.planes) {
       buffer.putUint8List(plane.bytes);
     }
