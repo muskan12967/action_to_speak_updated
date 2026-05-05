@@ -1,5 +1,6 @@
 import 'dart:typed_data';
-import 'dart:ui';
+import 'dart:ui' as ui;
+
 import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
 import 'package:flutter_tts/flutter_tts.dart';
@@ -18,9 +19,10 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
 
   CameraController? controller;
   late Interpreter interpreter;
+  late PoseDetector poseDetector;
+
   FlutterTts tts = FlutterTts();
   stt.SpeechToText speech = stt.SpeechToText();
-  late PoseDetector poseDetector;
 
   bool isCameraOn = false;
   bool isProcessing = false;
@@ -30,6 +32,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
 
   String detectedText = "";
   String lastResult = "";
+
   DateTime lastTrigger = DateTime.now();
 
   final int SEQ_LEN = 20;
@@ -58,9 +61,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     super.initState();
 
     poseDetector = PoseDetector(
-      options: PoseDetectorOptions(
-        mode: PoseDetectionMode.stream,
-      ),
+      options: PoseDetectorOptions(mode: PoseDetectionMode.stream),
     );
 
     loadModel();
@@ -95,12 +96,11 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
 
     setState(() {});
 
-    if (isCameraOn) {
+    if (!isStreamActive) {
       startStream();
     }
   }
 
-  // ================= TOGGLE CAMERA =================
   Future toggleCamera() async {
 
     if (isCameraOn) {
@@ -114,26 +114,23 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
       });
 
     } else {
-      setState(() {
-        isCameraOn = true;
-      });
-
+      setState(() => isCameraOn = true);
       await initCamera();
     }
   }
 
-  // ================= INPUT IMAGE =================
+  // ================= FIXED INPUT IMAGE =================
   InputImage inputImageFromCamera(
       CameraImage image,
       CameraDescription camera,
   ) {
-    final WriteBuffer allBytes = WriteBuffer();
+    final ui.WriteBuffer buffer = ui.WriteBuffer();
 
     for (final plane in image.planes) {
-      allBytes.putUint8List(plane.bytes);
+      buffer.putUint8List(plane.bytes);
     }
 
-    final Uint8List bytes = allBytes.done().buffer.asUint8List();
+    final bytes = buffer.done().buffer.asUint8List();
 
     return InputImage.fromBytes(
       bytes: bytes,
@@ -149,7 +146,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     );
   }
 
-  // ================= LANDMARKS FIXED =================
+  // ================= LANDMARKS =================
   Future<List<double>> extractLandmarks(InputImage image) async {
 
     final poses = await poseDetector.processImage(image);
@@ -174,9 +171,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   // ================= MODEL =================
   String predict(List<List<double>> seq) {
 
-    var input = [
-      List.generate(SEQ_LEN, (i) => seq[i])
-    ];
+    var input = [seq];
 
     var output = List.generate(
       1,
@@ -203,7 +198,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   // ================= STREAM =================
   void startStream() {
 
-    if (isStreamActive || controller == null) return;
+    if (controller == null || isStreamActive) return;
 
     controller!.startImageStream((image) async {
 
@@ -231,8 +226,8 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
             result != lastResult &&
             now.difference(lastTrigger).inMilliseconds > 1200) {
 
-          lastTrigger = now;
           lastResult = result;
+          lastTrigger = now;
 
           setState(() {
             detectedText = result;
@@ -255,7 +250,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     isStreamActive = true;
   }
 
-  // ================= TEXT + VOICE =================
+  // ================= TEXT INPUT =================
   void handleInput(String text) {
 
     String input = text.toLowerCase();
@@ -263,9 +258,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     signMap.forEach((key, video) {
       if (input.contains(key)) {
 
-        setState(() {
-          detectedText = key;
-        });
+        setState(() => detectedText = key);
 
         tts.speak("یہ $key کا اشارہ ہے");
 
@@ -284,7 +277,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   Widget build(BuildContext context) {
 
     return Scaffold(
-      appBar: AppBar(title: Text("Final Sign AI System")),
+      appBar: AppBar(title: Text("Final AI Sign System")),
 
       body: Column(
         children: [
@@ -302,7 +295,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
             child: TextField(
               controller: textController,
               decoration: InputDecoration(
-                hintText: "Roman Urdu input",
+                hintText: "Type Roman Urdu",
                 border: OutlineInputBorder(),
               ),
               onSubmitted: handleInput,
@@ -317,15 +310,13 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
                 icon: Icon(
                   isCameraOn ? Icons.videocam : Icons.videocam_off,
                   color: Colors.blue,
-                  size: 35,
                 ),
                 onPressed: toggleCamera,
               ),
 
               IconButton(
-                icon: Icon(Icons.mic, color: Colors.red, size: 35),
+                icon: Icon(Icons.mic, color: Colors.red),
                 onPressed: () async {
-
                   if (await speech.initialize()) {
                     speech.listen(
                       localeId: "ur_PK",
