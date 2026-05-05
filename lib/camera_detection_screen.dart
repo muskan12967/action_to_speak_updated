@@ -6,10 +6,11 @@ import 'package:tflite_flutter/tflite_flutter.dart';
 import 'package:video_player/video_player.dart';
 import 'package:google_mlkit_pose_detection/google_mlkit_pose_detection.dart';
 import 'package:google_mlkit_commons/google_mlkit_commons.dart';
+import 'dart:typed_data';
 
 class CameraDetectionScreen extends StatefulWidget {
   @override
-  _CameraDetectionScreenState createState() => _CameraDetectionScreenState();
+  State<CameraDetectionScreen> createState() => _CameraDetectionScreenState();
 }
 
 class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
@@ -18,21 +19,19 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   late Interpreter interpreter;
   FlutterTts tts = FlutterTts();
   stt.SpeechToText speech = stt.SpeechToText();
-
   late PoseDetector poseDetector;
 
-  List<List<double>> sequence = [];
+  bool isCameraOn = false;
   bool isProcessing = false;
 
+  List<List<double>> sequence = [];
+
   String detectedText = "";
-  String lastSpoken = "";
+  String lastResult = "";
+
+  TextEditingController textController = TextEditingController();
 
   final int SEQ_LEN = 20;
-
-  final List<String> labels = [
-    "baap","dost","ghar","khandan","kitaab",
-    "likhna","maa","parhna","talibeilm"
-  ];
 
   final Map<String, String> signMap = {
     "baap": "assets/videos/father.mp4",
@@ -46,6 +45,11 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     "talibeilm": "assets/videos/student.mp4",
   };
 
+  final List<String> labels = [
+    "baap","dost","ghar","khandan",
+    "kitaab","likhna","maa","parhna","talibeilm"
+  ];
+
   @override
   void initState() {
     super.initState();
@@ -54,7 +58,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
       options: PoseDetectorOptions(mode: PoseDetectionMode.stream),
     );
 
-    initCamera();
     loadModel();
     initTTS();
   }
@@ -67,47 +70,76 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     interpreter = await Interpreter.fromAsset("model.tflite");
   }
 
+  // ================= FRONT CAMERA INIT =================
   Future initCamera() async {
+
     final cams = await availableCameras();
 
+    final frontCam = cams.firstWhere(
+      (c) => c.lensDirection == CameraLensDirection.front,
+    );
+
     controller = CameraController(
-      cams.first,
+      frontCam,
       ResolutionPreset.medium,
       enableAudio: false,
     );
 
     await controller!.initialize();
-    startStream();
-
     setState(() {});
+
+    startStream();
   }
 
-InputImage inputImageFromCamera(CameraImage image, CameraDescription camera) {
+  // ================= TOGGLE CAMERA =================
+  Future toggleCamera() async {
 
-  final plane = image.planes[0];
+    if (isCameraOn) {
+      await controller?.stopImageStream();
+      await controller?.dispose();
+      controller = null;
 
-  final inputImage = InputImage.fromBytes(
-    bytes: plane.bytes,
-    metadata: InputImageMetadata(
-      size: Size(image.width.toDouble(), image.height.toDouble()),
-      rotation: InputImageRotationValue.fromRawValue(camera.sensorOrientation) ??
-          InputImageRotation.rotation0deg,
-      format: InputImageFormatValue.fromRawValue(image.format.raw) ??
-          InputImageFormat.nv21,
-      bytesPerRow: plane.bytesPerRow,
-    ),
-  );
+      setState(() {
+        isCameraOn = false;
+      });
 
-  return inputImage;
-}
+    } else {
+      await initCamera();
 
-  Future<List<double>> extractLandmarks(InputImage inputImage) async {
-
-    final poses = await poseDetector.processImage(inputImage);
-
-    if (poses.isEmpty) {
-      return List.filled(63, 0.0);
+      setState(() {
+        isCameraOn = true;
+      });
     }
+  }
+
+  // ================= INPUT IMAGE =================
+  InputImage inputImageFromCamera(CameraImage image, CameraDescription cam) {
+
+    final WriteBuffer buffer = WriteBuffer();
+
+    for (final plane in image.planes) {
+      buffer.putUint8List(plane.bytes);
+    }
+
+    final bytes = buffer.done().buffer.asUint8List();
+
+    return InputImage.fromBytes(
+      bytes: bytes,
+      metadata: InputImageMetadata(
+        size: Size(image.width.toDouble(), image.height.toDouble()),
+        rotation: InputImageRotation.rotation0deg,
+        format: InputImageFormat.nv21,
+        bytesPerRow: image.planes[0].bytesPerRow,
+      ),
+    );
+  }
+
+  // ================= LANDMARKS =================
+  Future<List<double>> extractLandmarks(InputImage image) async {
+
+    final poses = await poseDetector.processImage(image);
+
+    if (poses.isEmpty) return List.filled(63, 0.0);
 
     final pose = poses.first;
 
@@ -124,33 +156,32 @@ InputImage inputImageFromCamera(CameraImage image, CameraDescription camera) {
     return data;
   }
 
+  // ================= MODEL =================
   String predict(List<List<double>> seq) {
 
     var input = [seq];
-
-    var output = List.generate(
-      1,
-      (_) => List.filled(labels.length, 0.0),
-    );
+    var output = List.generate(1, (_) => List.filled(labels.length, 0.0));
 
     interpreter.run(input, output);
 
     int idx = 0;
-    double maxVal = output[0][0];
+    double max = output[0][0];
 
     for (int i = 0; i < output[0].length; i++) {
-      if (output[0][i] > maxVal) {
-        maxVal = output[0][i];
+      if (output[0][i] > max) {
+        max = output[0][i];
         idx = i;
       }
     }
 
-    if (maxVal < 0.5) return "unknown";
+    if (max < 0.6) return "unknown";
 
     return labels[idx];
   }
 
+  // ================= REAL TIME STREAM =================
   void startStream() {
+
     controller!.startImageStream((image) async {
 
       if (isProcessing) return;
@@ -171,23 +202,22 @@ InputImage inputImageFromCamera(CameraImage image, CameraDescription camera) {
 
         String result = predict(sequence);
 
-        if (result != "unknown") {
+        if (result != "unknown" && result != lastResult) {
+
+          lastResult = result;
 
           setState(() {
             detectedText = result;
           });
 
-          if (result != lastSpoken) {
-            await tts.speak(result);
-            lastSpoken = result;
+          tts.speak(result);
 
-            Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (_) => VideoScreen(signMap[result]!),
-              ),
-            );
-          }
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => VideoScreen(signMap[result]!),
+            ),
+          );
         }
       }
 
@@ -195,51 +225,92 @@ InputImage inputImageFromCamera(CameraImage image, CameraDescription camera) {
     });
   }
 
+  // ================= HANDLE TEXT + VOICE =================
+  void handleInput(String text) {
+
+    String input = text.toLowerCase();
+
+    signMap.forEach((key, video) {
+      if (input.contains(key)) {
+
+        setState(() {
+          detectedText = key;
+        });
+
+        tts.speak("یہ $key کا اشارہ ہے");
+
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => VideoScreen(video),
+          ),
+        );
+      }
+    });
+  }
+
+  // ================= UI =================
   @override
   Widget build(BuildContext context) {
 
-    if (controller == null || !controller!.value.isInitialized) {
-      return Scaffold(body: Center(child: CircularProgressIndicator()));
-    }
-
     return Scaffold(
-      appBar: AppBar(title: Text("MediaPipe Sign Detection")),
+      appBar: AppBar(title: Text("AI Sign Detection")),
 
       body: Column(
         children: [
 
-          Expanded(child: CameraPreview(controller!)),
-
-          Text(
-            "Detected: $detectedText",
-            style: TextStyle(fontSize: 20),
+          Expanded(
+            child: isCameraOn && controller != null
+                ? CameraPreview(controller!)
+                : Center(child: Text("Camera OFF")),
           ),
 
-          IconButton(
-            icon: Icon(Icons.mic, size: 40),
-            onPressed: () async {
+          Text("Detected: $detectedText"),
 
-              if (await speech.initialize()) {
-                speech.listen(
-                  localeId: "ur_PK",
-                  onResult: (res) {
-                    String text = res.recognizedWords.toLowerCase();
+          // TEXT INPUT
+          Padding(
+            padding: EdgeInsets.all(8),
+            child: TextField(
+              controller: textController,
+              decoration: InputDecoration(
+                hintText: "Type Urdu/Roman Urdu",
+                border: OutlineInputBorder(),
+              ),
+              onSubmitted: (val) {
+                handleInput(val);
+              },
+            ),
+          ),
 
-                    signMap.forEach((key, video) {
-                      if (text.contains(key)) {
-                        tts.speak("یہ $key کا اشارہ ہے");
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => VideoScreen(video),
-                          ),
-                        );
-                      }
-                    });
-                  },
-                );
-              }
-            },
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+
+              // CAMERA BUTTON
+              IconButton(
+                icon: Icon(
+                  isCameraOn ? Icons.videocam : Icons.videocam_off,
+                  size: 35,
+                  color: Colors.blue,
+                ),
+                onPressed: toggleCamera,
+              ),
+
+              // MIC BUTTON
+              IconButton(
+                icon: Icon(Icons.mic, size: 35, color: Colors.red),
+                onPressed: () async {
+                  if (await speech.initialize()) {
+                    speech.listen(
+                      localeId: "ur_PK",
+                      onResult: (res) {
+                        handleInput(res.recognizedWords);
+                      },
+                    );
+                  }
+                },
+              ),
+            ],
           )
         ],
       ),
@@ -257,44 +328,15 @@ InputImage inputImageFromCamera(CameraImage image, CameraDescription camera) {
   }
 }
 
-// ---------------- VIDEO ----------------
-class VideoScreen extends StatefulWidget {
+// ================= VIDEO SCREEN =================
+class VideoScreen extends StatelessWidget {
   final String path;
   VideoScreen(this.path);
 
   @override
-  _VideoScreenState createState() => _VideoScreenState();
-}
-
-class _VideoScreenState extends State<VideoScreen> {
-
-  late VideoPlayerController controller;
-
-  @override
-  void initState() {
-    super.initState();
-
-    controller = VideoPlayerController.asset(widget.path)
-      ..initialize().then((_) {
-        controller.play();
-        setState(() {});
-      });
-  }
-
-  @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: Center(
-        child: controller.value.isInitialized
-            ? VideoPlayer(controller)
-            : CircularProgressIndicator(),
-      ),
+      body: Center(child: Text("Play Video: $path")),
     );
-  }
-
-  @override
-  void dispose() {
-    controller.dispose();
-    super.dispose();
   }
 }
