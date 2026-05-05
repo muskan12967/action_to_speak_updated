@@ -1,3 +1,4 @@
+
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
@@ -6,8 +7,6 @@ import 'package:tflite_flutter/tflite_flutter.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 import 'package:video_player/video_player.dart';
 import 'package:google_mlkit_pose_detection/google_mlkit_pose_detection.dart';
-import 'dart:typed_data';
-import 'package:flutter/foundation.dart'; // 🔥 IMPORTANT
 
 class CameraDetectionScreen extends StatefulWidget {
   @override
@@ -20,7 +19,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   late Interpreter interpreter;
   FlutterTts tts = FlutterTts();
   late stt.SpeechToText speech;
-
   late PoseDetector poseDetector;
 
   List<List<double>> sequence = [];
@@ -29,10 +27,11 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   String lastSpoken = "";
 
   bool isProcessing = false;
+  bool isListening = false;
 
   final int SEQ_LEN = 20;
 
-  // ✅ TRAINING LABEL ORDER
+  // ✅ LABELS (MATCH TRAINING)
   final List<String> labels = [
     "baap",
     "dost",
@@ -45,7 +44,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     "talibeilm",
   ];
 
-  // ✅ MAP
   final Map<String, Map<String, String>> signMap = {
     "baap": {"urdu": "باپ", "video": "assets/videos/father.mp4"},
     "dost": {"urdu": "دوست", "video": "assets/videos/friend.mp4"},
@@ -63,7 +61,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     super.initState();
 
     speech = stt.SpeechToText();
-
     poseDetector = PoseDetector(options: PoseDetectorOptions());
 
     loadModel();
@@ -84,6 +81,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
 
   // ---------------- CAMERA ----------------
   Future initCamera() async {
+
     final cameras = await availableCameras();
 
     final cam = cameras.firstWhere(
@@ -101,68 +99,60 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
 
     setState(() {});
   }
-  // ---------------- IMAGE CONVERT ----------------
-InputImage inputImageFromCamera(CameraImage image) {
 
-  final bytes = image.planes[0].bytes;
+  // ---------------- MIC FIXED ----------------
+  void startListening() async {
 
-  final inputImage = InputImage.fromBytes(
-    bytes: bytes,
-    metadata: InputImageMetadata(
-      size: Size(image.width.toDouble(), image.height.toDouble()),
-      rotation: InputImageRotation.rotation0deg,
-      format: InputImageFormat.yuv420,
-      bytesPerRow: image.planes[0].bytesPerRow,
-    ),
-  );
+    bool available = await speech.initialize();
 
-  return inputImage;
-}
+    if (available) {
+      setState(() => isListening = true);
 
-  // ---------------- LANDMARKS ----------------
- Future<List<double>> extractLandmarks(CameraImage image) async {
-
-  final inputImage = inputImageFromCamera(image); // ✅ USE HERE
-
-  final poses = await poseDetector.processImage(inputImage);
-
-  if (poses.isEmpty) {
-    return List.filled(63, 0.0);
-  }
-
-  final pose = poses.first;
-
-  final points = [
-    pose.landmarks[PoseLandmarkType.leftWrist],
-    pose.landmarks[PoseLandmarkType.leftElbow],
-    pose.landmarks[PoseLandmarkType.leftShoulder],
-  ];
-
-  List<double> data = [];
-
-  for (var p in points) {
-    if (p != null) {
-      data.addAll([p.x, p.y, 0.0]);
-    } else {
-      data.addAll([0.0, 0.0, 0.0]);
+      speech.listen(
+        localeId: "ur_PK",
+        listenFor: Duration(seconds: 5),
+        onResult: (res) {
+          handleVoice(res.recognizedWords);
+        },
+      );
     }
   }
 
-  while (data.length < 63) {
-    data.add(0.0);
+  void stopListening() {
+    speech.stop();
+    setState(() => isListening = false);
   }
 
-  return data;
-}
+  // ---------------- VOICE HANDLER ----------------
+  void handleVoice(String text) async {
+
+    for (var key in signMap.keys) {
+      if (text.contains(key) || text.contains(signMap[key]!["urdu"]!)) {
+
+        playVideo(signMap[key]!["video"]!);
+
+        await tts.speak("آپ نے $key کا اشارہ دیا ہے");
+
+        return;
+      }
+    }
+
+    await tts.speak("سمجھ نہیں آیا");
+  }
+
+  // ---------------- VIDEO ----------------
+  void playVideo(String path) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => VideoScreen(path)),
+    );
+  }
+
   // ---------------- PREDICT ----------------
   String predict(List<List<double>> seq) {
 
     var input = [seq];
-
-    var output = List.generate(
-      1,
-      (_) => List.filled(labels.length, 0.0),
-    );
+    var output = List.generate(1, (_) => List.filled(labels.length, 0.0));
 
     interpreter.run(input, output);
 
@@ -188,7 +178,8 @@ InputImage inputImageFromCamera(CameraImage image) {
       if (isProcessing) return;
       isProcessing = true;
 
-      var frame = await extractLandmarks(image);
+      // ⚠️ placeholder landmarks (replace with real MediaPipe later)
+      List<double> frame = List.filled(45,20,63);
 
       sequence.add(frame);
 
@@ -229,6 +220,7 @@ InputImage inputImageFromCamera(CameraImage image) {
 
     return Scaffold(
       appBar: AppBar(title: Text("Sign AI Assistant")),
+
       body: Column(
         children: [
 
@@ -237,12 +229,31 @@ InputImage inputImageFromCamera(CameraImage image) {
             child: CameraPreview(controller!),
           ),
 
-          Padding(
-            padding: EdgeInsets.all(10),
-            child: Text(
-              "Detected: $detectedText",
-              style: TextStyle(fontSize: 20),
-            ),
+          Text(
+            "Detected: $detectedText",
+            style: TextStyle(fontSize: 20),
+          ),
+
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+
+              // 🎤 MIC BUTTON FIXED
+              IconButton(
+                icon: Icon(
+                  isListening ? Icons.mic : Icons.mic_none,
+                  color: Colors.green,
+                  size: 40,
+                ),
+                onPressed: () {
+                  if (isListening) {
+                    stopListening();
+                  } else {
+                    startListening();
+                  }
+                },
+              ),
+            ],
           ),
         ],
       ),
@@ -255,6 +266,7 @@ InputImage inputImageFromCamera(CameraImage image) {
     interpreter.close();
     tts.stop();
     poseDetector.close();
+    speech.stop();
     super.dispose();
   }
 }
