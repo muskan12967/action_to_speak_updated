@@ -1,5 +1,3 @@
-import 'dart:typed_data';
-import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
 import 'package:flutter_tts/flutter_tts.dart';
@@ -7,6 +5,7 @@ import 'package:speech_to_text/speech_to_text.dart' as stt;
 import 'package:tflite_flutter/tflite_flutter.dart';
 import 'package:video_player/video_player.dart';
 import 'package:google_mlkit_pose_detection/google_mlkit_pose_detection.dart';
+import 'package:google_mlkit_commons/google_mlkit_commons.dart';
 
 class CameraDetectionScreen extends StatefulWidget {
   @override
@@ -83,34 +82,24 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     setState(() {});
   }
 
-  // ✅ FIXED INPUT IMAGE (NO ERRORS)
-  InputImage inputImageFromCamera(CameraImage image, CameraDescription camera) {
+InputImage inputImageFromCamera(CameraImage image, CameraDescription camera) {
 
-    final ui.WriteBuffer allBytes = ui.WriteBuffer();
+  final plane = image.planes[0];
 
-    for (final plane in image.planes) {
-      allBytes.putUint8List(plane.bytes);
-    }
+  final inputImage = InputImage.fromBytes(
+    bytes: plane.bytes,
+    metadata: InputImageMetadata(
+      size: Size(image.width.toDouble(), image.height.toDouble()),
+      rotation: InputImageRotationValue.fromRawValue(camera.sensorOrientation) ??
+          InputImageRotation.rotation0deg,
+      format: InputImageFormatValue.fromRawValue(image.format.raw) ??
+          InputImageFormat.nv21,
+      bytesPerRow: plane.bytesPerRow,
+    ),
+  );
 
-    final bytes = allBytes.done().buffer.asUint8List();
-
-    final rotation =
-        InputImageRotationValue.fromRawValue(camera.sensorOrientation) ??
-            InputImageRotation.rotation0deg;
-
-    final format = InputImageFormatValue.fromRawValue(image.format.raw) ??
-        InputImageFormat.nv21;
-
-    return InputImage.fromBytes(
-      bytes: bytes,
-      metadata: InputImageMetadata(
-        size: Size(image.width.toDouble(), image.height.toDouble()),
-        rotation: rotation,
-        format: format,
-        bytesPerRow: image.planes.first.bytesPerRow,
-      ),
-    );
-  }
+  return inputImage;
+}
 
   Future<List<double>> extractLandmarks(InputImage inputImage) async {
 
