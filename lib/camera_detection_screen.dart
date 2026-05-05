@@ -1,5 +1,5 @@
 import 'dart:typed_data';
-import 'dart:ui'; // ✅ FIX WriteBuffer
+import 'dart:ui'; // ✅ FIX HERE
 import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
 import 'package:flutter_tts/flutter_tts.dart';
