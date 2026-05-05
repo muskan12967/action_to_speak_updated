@@ -116,23 +116,25 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   }
 
   // ================= INPUT IMAGE =================
- InputImage inputImageFromCamera(
+InputImage inputImageFromCamera(
   CameraImage image,
   CameraDescription camera,
 ) {
-  final WriteBuffer allBytes = WriteBuffer();
+  final ui.WriteBuffer allBytes = ui.WriteBuffer();
 
   for (final plane in image.planes) {
     allBytes.putUint8List(plane.bytes);
   }
 
-  final Uint8List bytes = allBytes.done().buffer.asUint8List();
+  final Uint8List bytes =
+      allBytes.done().buffer.asUint8List();
 
   return InputImage.fromBytes(
     bytes: bytes,
     metadata: InputImageMetadata(
       size: Size(image.width.toDouble(), image.height.toDouble()),
-      rotation: InputImageRotationValue.fromRawValue(camera.sensorOrientation) ??
+      rotation: InputImageRotationValue.fromRawValue(
+              camera.sensorOrientation) ??
           InputImageRotation.rotation0deg,
       format: InputImageFormatValue.fromRawValue(image.format.raw) ??
           InputImageFormat.nv21,
