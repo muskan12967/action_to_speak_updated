@@ -1,4 +1,3 @@
-
 import 'dart:typed_data';
 import 'dart:ui';
 import 'package:flutter/material.dart';
@@ -9,7 +8,6 @@ import 'package:tflite_flutter/tflite_flutter.dart';
 import 'package:video_player/video_player.dart';
 import 'package:google_mlkit_pose_detection/google_mlkit_pose_detection.dart';
 import 'package:google_mlkit_commons/google_mlkit_commons.dart';
-
 
 class CameraDetectionScreen extends StatefulWidget {
   @override
@@ -26,15 +24,17 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
 
   bool isCameraOn = false;
   bool isProcessing = false;
+  bool isStreamActive = false;
 
   List<List<double>> sequence = [];
 
   String detectedText = "";
   String lastResult = "";
-
-  TextEditingController textController = TextEditingController();
+  DateTime lastTrigger = DateTime.now();
 
   final int SEQ_LEN = 20;
+
+  final TextEditingController textController = TextEditingController();
 
   final Map<String, String> signMap = {
     "baap": "assets/videos/father.mp4",
@@ -58,7 +58,9 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     super.initState();
 
     poseDetector = PoseDetector(
-      options: PoseDetectorOptions(mode: PoseDetectionMode.stream),
+      options: PoseDetectorOptions(
+        mode: PoseDetectionMode.stream,
+      ),
     );
 
     loadModel();
@@ -67,13 +69,14 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
 
   Future initTTS() async {
     await tts.setLanguage("ur-PK");
+    await tts.setSpeechRate(0.5);
   }
 
   Future loadModel() async {
     interpreter = await Interpreter.fromAsset("model.tflite");
   }
 
-  // ================= FRONT CAMERA INIT =================
+  // ================= FRONT CAMERA =================
   Future initCamera() async {
 
     final cams = await availableCameras();
@@ -89,9 +92,12 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     );
 
     await controller!.initialize();
+
     setState(() {});
 
-    startStream();
+    if (isCameraOn) {
+      startStream();
+    }
   }
 
   // ================= TOGGLE CAMERA =================
@@ -104,46 +110,46 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
 
       setState(() {
         isCameraOn = false;
+        isStreamActive = false;
       });
 
     } else {
-      await initCamera();
-
       setState(() {
         isCameraOn = true;
       });
+
+      await initCamera();
     }
   }
 
   // ================= INPUT IMAGE =================
-InputImage inputImageFromCamera(
-  CameraImage image,
-  CameraDescription camera,
-) {
-  final ui.WriteBuffer allBytes = ui.WriteBuffer();
+  InputImage inputImageFromCamera(
+      CameraImage image,
+      CameraDescription camera,
+  ) {
+    final WriteBuffer allBytes = WriteBuffer();
 
-  for (final plane in image.planes) {
-    allBytes.putUint8List(plane.bytes);
+    for (final plane in image.planes) {
+      allBytes.putUint8List(plane.bytes);
+    }
+
+    final Uint8List bytes = allBytes.done().buffer.asUint8List();
+
+    return InputImage.fromBytes(
+      bytes: bytes,
+      metadata: InputImageMetadata(
+        size: Size(image.width.toDouble(), image.height.toDouble()),
+        rotation: InputImageRotationValue.fromRawValue(
+            camera.sensorOrientation) ??
+            InputImageRotation.rotation0deg,
+        format: InputImageFormatValue.fromRawValue(image.format.raw) ??
+            InputImageFormat.nv21,
+        bytesPerRow: image.planes[0].bytesPerRow,
+      ),
+    );
   }
 
-  final Uint8List bytes =
-      allBytes.done().buffer.asUint8List();
-
-  return InputImage.fromBytes(
-    bytes: bytes,
-    metadata: InputImageMetadata(
-      size: Size(image.width.toDouble(), image.height.toDouble()),
-      rotation: InputImageRotationValue.fromRawValue(
-              camera.sensorOrientation) ??
-          InputImageRotation.rotation0deg,
-      format: InputImageFormatValue.fromRawValue(image.format.raw) ??
-          InputImageFormat.nv21,
-      bytesPerRow: image.planes[0].bytesPerRow,
-    ),
-  );
-}
-
-  // ================= LANDMARKS =================
+  // ================= LANDMARKS FIXED =================
   Future<List<double>> extractLandmarks(InputImage image) async {
 
     final poses = await poseDetector.processImage(image);
@@ -154,9 +160,9 @@ InputImage inputImageFromCamera(
 
     List<double> data = [];
 
-    pose.landmarks.forEach((_, lm) {
+    for (final lm in pose.landmarks.values) {
       data.addAll([lm.x, lm.y, lm.z ?? 0.0]);
-    });
+    }
 
     while (data.length < 63) {
       data.add(0.0);
@@ -168,28 +174,36 @@ InputImage inputImageFromCamera(
   // ================= MODEL =================
   String predict(List<List<double>> seq) {
 
-    var input = [seq];
-    var output = List.generate(1, (_) => List.filled(labels.length, 0.0));
+    var input = [
+      List.generate(SEQ_LEN, (i) => seq[i])
+    ];
+
+    var output = List.generate(
+      1,
+      (_) => List.filled(labels.length, 0.0),
+    );
 
     interpreter.run(input, output);
 
     int idx = 0;
-    double max = output[0][0];
+    double maxVal = output[0][0];
 
     for (int i = 0; i < output[0].length; i++) {
-      if (output[0][i] > max) {
-        max = output[0][i];
+      if (output[0][i] > maxVal) {
+        maxVal = output[0][i];
         idx = i;
       }
     }
 
-    if (max < 0.6) return "unknown";
+    if (maxVal < 0.6) return "unknown";
 
     return labels[idx];
   }
 
-  // ================= REAL TIME STREAM =================
+  // ================= STREAM =================
   void startStream() {
+
+    if (isStreamActive || controller == null) return;
 
     controller!.startImageStream((image) async {
 
@@ -197,7 +211,7 @@ InputImage inputImageFromCamera(
       isProcessing = true;
 
       final inputImage =
-          inputImageFromCamera(image, controller!.description);
+      inputImageFromCamera(image, controller!.description);
 
       final frame = await extractLandmarks(inputImage);
 
@@ -211,8 +225,13 @@ InputImage inputImageFromCamera(
 
         String result = predict(sequence);
 
-        if (result != "unknown" && result != lastResult) {
+        final now = DateTime.now();
 
+        if (result != "unknown" &&
+            result != lastResult &&
+            now.difference(lastTrigger).inMilliseconds > 1200) {
+
+          lastTrigger = now;
           lastResult = result;
 
           setState(() {
@@ -232,9 +251,11 @@ InputImage inputImageFromCamera(
 
       isProcessing = false;
     });
+
+    isStreamActive = true;
   }
 
-  // ================= HANDLE TEXT + VOICE =================
+  // ================= TEXT + VOICE =================
   void handleInput(String text) {
 
     String input = text.toLowerCase();
@@ -263,7 +284,7 @@ InputImage inputImageFromCamera(
   Widget build(BuildContext context) {
 
     return Scaffold(
-      appBar: AppBar(title: Text("AI Sign Detection")),
+      appBar: AppBar(title: Text("Final Sign AI System")),
 
       body: Column(
         children: [
@@ -276,18 +297,15 @@ InputImage inputImageFromCamera(
 
           Text("Detected: $detectedText"),
 
-          // TEXT INPUT
           Padding(
             padding: EdgeInsets.all(8),
             child: TextField(
               controller: textController,
               decoration: InputDecoration(
-                hintText: "Type Urdu/Roman Urdu",
+                hintText: "Roman Urdu input",
                 border: OutlineInputBorder(),
               ),
-              onSubmitted: (val) {
-                handleInput(val);
-              },
+              onSubmitted: handleInput,
             ),
           ),
 
@@ -295,20 +313,19 @@ InputImage inputImageFromCamera(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
 
-              // CAMERA BUTTON
               IconButton(
                 icon: Icon(
                   isCameraOn ? Icons.videocam : Icons.videocam_off,
-                  size: 35,
                   color: Colors.blue,
+                  size: 35,
                 ),
                 onPressed: toggleCamera,
               ),
 
-              // MIC BUTTON
               IconButton(
-                icon: Icon(Icons.mic, size: 35, color: Colors.red),
+                icon: Icon(Icons.mic, color: Colors.red, size: 35),
                 onPressed: () async {
+
                   if (await speech.initialize()) {
                     speech.listen(
                       localeId: "ur_PK",
@@ -337,7 +354,7 @@ InputImage inputImageFromCamera(
   }
 }
 
-// ================= VIDEO SCREEN =================
+// ================= VIDEO =================
 class VideoScreen extends StatelessWidget {
   final String path;
   VideoScreen(this.path);
@@ -345,7 +362,7 @@ class VideoScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: Center(child: Text("Play Video: $path")),
+      body: Center(child: Text("Playing: $path")),
     );
   }
 }
