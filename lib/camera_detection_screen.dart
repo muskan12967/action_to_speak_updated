@@ -2,10 +2,12 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
 import 'package:flutter_tts/flutter_tts.dart';
-import 'package:tflite_flutter/tflite_flutter.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 import 'package:video_player/video_player.dart';
-import 'package:google_mlkit_hands/google_mlkit_hands.dart';
+import 'package:tflite_flutter/tflite_flutter.dart';
+
+import 'package:google_mlkit_pose_detection/google_mlkit_pose_detection.dart';
+import 'package:google_mlkit_commons/google_mlkit_commons.dart';
 
 class CameraDetectionScreen extends StatefulWidget {
   @override
@@ -15,20 +17,20 @@ class CameraDetectionScreen extends StatefulWidget {
 class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
 
   CameraController? controller;
+
+  late PoseDetector poseDetector;
   late Interpreter interpreter;
+
   FlutterTts tts = FlutterTts();
-  late stt.SpeechToText speech;
-
-  late HandsDetector handsDetector;
-
-  List<List<double>> sequence = [];
+  stt.SpeechToText speech = stt.SpeechToText();
 
   bool isProcessing = false;
   bool isListening = false;
 
   String detectedText = "";
-  String lastSpoken = "";
+  String lastResult = "";
 
+  List<List<double>> sequence = [];
   final int SEQ_LEN = 20;
 
   final List<String> labels = [
@@ -43,34 +45,25 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     "talibeilm",
   ];
 
-  final Map<String, Map<String, String>> signMap = {
-    "baap": {"urdu": "باپ", "video": "assets/videos/father.mp4"},
-    "dost": {"urdu": "دوست", "video": "assets/videos/friend.mp4"},
-    "ghar": {"urdu": "گھر", "video": "assets/videos/home.mp4"},
-    "khandan": {"urdu": "خاندان", "video": "assets/videos/family.mp4"},
-    "kitaab": {"urdu": "کتاب", "video": "assets/videos/book.mp4"},
-    "likhna": {"urdu": "لکھنا", "video": "assets/videos/write.mp4"},
-    "maa": {"urdu": "ماں", "video": "assets/videos/mother.mp4"},
-    "parhna": {"urdu": "پڑھنا", "video": "assets/videos/read.mp4"},
-    "talibeilm": {"urdu": "طالبِ علم", "video": "assets/videos/student.mp4"},
+  final Map<String, String> signMap = {
+    "baap": "assets/videos/father.mp4",
+    "dost": "assets/videos/friend.mp4",
+    "ghar": "assets/videos/home.mp4",
+    "khandan": "assets/videos/family.mp4",
+    "kitaab": "assets/videos/book.mp4",
+    "likhna": "assets/videos/write.mp4",
+    "maa": "assets/videos/mother.mp4",
+    "parhna": "assets/videos/read.mp4",
+    "talibeilm": "assets/videos/student.mp4",
   };
 
   @override
   void initState() {
     super.initState();
-
-    speech = stt.SpeechToText();
-
-    handsDetector = HandsDetector(
-      options: HandsDetectorOptions(
-        mode: DetectionMode.stream,
-        maxHands: 1,
-      ),
-    );
-
-    loadModel();
-    initCamera();
     initTTS();
+    loadModel();
+    initPose();
+    initCamera();
   }
 
   // ---------------- MODEL ----------------
@@ -78,49 +71,96 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     interpreter = await Interpreter.fromAsset('model.tflite');
   }
 
+  // ---------------- POSE (MEDIAPIPE FIX) ----------------
+  void initPose() {
+    poseDetector = PoseDetector(
+      options: PoseDetectorOptions(
+        mode: PoseDetectionMode.stream,
+      ),
+    );
+  }
+
   // ---------------- TTS ----------------
   Future initTTS() async {
     await tts.setLanguage("ur-PK");
     await tts.setSpeechRate(0.5);
-    await tts.setPitch(1.0);
   }
 
   // ---------------- CAMERA ----------------
   Future initCamera() async {
 
-    final cameras = await availableCameras();
-
-    final cam = cameras.firstWhere(
-      (c) => c.lensDirection == CameraLensDirection.front
-    );
+    final cams = await availableCameras();
 
     controller = CameraController(
-      cam,
+      cams.first,
       ResolutionPreset.medium,
       enableAudio: false,
     );
 
     await controller!.initialize();
-    startStream();
-
     setState(() {});
+
+    startStream();
   }
 
-  // ---------------- LANDMARKS ----------------
+  // ---------------- INPUT IMAGE FIX ----------------
+  InputImage inputImageFromCamera(CameraImage image) {
+
+    final WriteBuffer allBytes = WriteBuffer();
+
+    for (final plane in image.planes) {
+      allBytes.putUint8List(plane.bytes);
+    }
+
+    final bytes = allBytes.done().buffer.asUint8List();
+
+    final Size imageSize =
+        Size(image.width.toDouble(), image.height.toDouble());
+
+    final imageRotation = InputImageRotation.rotation0deg;
+
+    final inputImageFormat =
+        InputImageFormatValue.fromRawValue(image.format.raw) ??
+            InputImageFormat.nv21;
+
+    final planeData = image.planes.map(
+      (plane) {
+        return InputImagePlaneMetadata(
+          bytesPerRow: plane.bytesPerRow,
+          height: plane.height,
+          width: plane.width,
+        );
+      },
+    ).toList();
+
+    return InputImage.fromBytes(
+      bytes: bytes,
+      metadata: InputImageMetadata(
+        size: imageSize,
+        rotation: imageRotation,
+        format: inputImageFormat,
+        bytesPerRow: image.planes[0].bytesPerRow,
+      ),
+    );
+  }
+
+  // ---------------- LANDMARK EXTRACTION ----------------
   Future<List<double>> extractLandmarks(InputImage image) async {
 
-    final hands = await handsDetector.processImage(image);
+    final poses = await poseDetector.processImage(image);
 
-    if (hands.isEmpty) {
+    if (poses.isEmpty) {
       return List.filled(63, 0.0);
     }
 
-    final hand = hands.first;
+    final pose = poses.first;
 
     List<double> data = [];
 
-    hand.landmarks.forEach((lm) {
-      data.addAll([lm.x, lm.y, lm.z ?? 0.0]);
+    pose.landmarks.forEach((type, landmark) {
+      data.add(landmark.x);
+      data.add(landmark.y);
+      data.add(landmark.z ?? 0.0);
     });
 
     while (data.length < 63) {
@@ -157,22 +197,15 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     return labels[idx];
   }
 
-  // ---------------- STREAM (REAL TIME FIXED) ----------------
+  // ---------------- REAL TIME STREAM ----------------
   void startStream() {
+
     controller!.startImageStream((CameraImage image) async {
 
       if (isProcessing) return;
       isProcessing = true;
 
-      final inputImage = InputImage.fromBytes(
-        bytes: image.planes[0].bytes,
-        metadata: InputImageMetadata(
-          size: Size(image.width.toDouble(), image.height.toDouble()),
-          rotation: InputImageRotation.rotation0deg,
-          format: InputImageFormat.yuv420,
-          bytesPerRow: image.planes[0].bytesPerRow,
-        ),
-      );
+      final inputImage = inputImageFromCamera(image);
 
       final frame = await extractLandmarks(inputImage);
 
@@ -186,33 +219,71 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
 
         String result = predict(sequence);
 
-        if (result != "unknown" && signMap.containsKey(result)) {
+        if (result != "unknown" && result != lastResult) {
 
-          String urdu = signMap[result]!["urdu"]!;
-          String video = signMap[result]!["video"]!;
+          lastResult = result;
 
-          if (result != lastSpoken) {
+          setState(() {
+            detectedText = result;
+          });
 
-            await tts.stop();
-            await tts.speak(urdu);
+          await tts.speak(result);
 
-            lastSpoken = result;
-
+          if (signMap.containsKey(result)) {
             Navigator.push(
               context,
               MaterialPageRoute(
-                builder: (_) => VideoScreen(video),
+                builder: (_) => VideoScreen(signMap[result]!),
               ),
             );
           }
-
-          setState(() {
-            detectedText = urdu;
-          });
         }
       }
 
       isProcessing = false;
+    });
+  }
+
+  // ---------------- MIC ----------------
+  void toggleMic() async {
+
+    if (!isListening) {
+
+      bool ok = await speech.initialize();
+
+      if (ok) {
+        setState(() => isListening = true);
+
+        speech.listen(
+          localeId: "ur_PK",
+          onResult: (res) {
+            handleVoice(res.recognizedWords.toLowerCase());
+          },
+        );
+      }
+
+    } else {
+      speech.stop();
+      setState(() => isListening = false);
+    }
+  }
+
+  // ---------------- VOICE ----------------
+  void handleVoice(String text) {
+
+    signMap.forEach((key, video) {
+
+      if (text.contains(key)) {
+
+        tts.speak("یہ $key کا اشارہ ہے");
+
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => VideoScreen(video),
+          ),
+        );
+      }
     });
   }
 
@@ -225,17 +296,12 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     }
 
     return Scaffold(
-      appBar: AppBar(title: Text("Real-Time Sign Detection")),
+      appBar: AppBar(title: Text("MediaPipe Sign Detection")),
 
       body: Column(
         children: [
 
-          Expanded(
-            flex: 3,
-            child: CameraPreview(controller!),
-          ),
-
-          SizedBox(height: 10),
+          Expanded(child: CameraPreview(controller!)),
 
           Text(
             "Detected: $detectedText",
@@ -243,51 +309,25 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
           ),
 
           IconButton(
-            icon: Icon(Icons.mic, color: Colors.green, size: 40),
-            onPressed: () async {
-
-              bool ok = await speech.initialize();
-
-              if (ok) {
-                speech.listen(
-                  localeId: "ur_PK",
-                  onResult: (res) {
-                    handleVoice(res.recognizedWords);
-                  },
-                );
-              }
-            },
+            icon: Icon(
+              isListening ? Icons.mic : Icons.mic_none,
+              color: isListening ? Colors.red : Colors.green,
+              size: 40,
+            ),
+            onPressed: toggleMic,
           ),
         ],
       ),
     );
   }
 
-  // ---------------- VOICE ----------------
-  void handleVoice(String text) {
-
-    signMap.forEach((key, value) {
-
-      if (text.contains(value["urdu"]!)) {
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (_) => VideoScreen(value["video"]!),
-          ),
-        );
-
-        tts.speak("یہ $key کا اشارہ ہے");
-      }
-    });
-  }
-
   @override
   void dispose() {
     controller?.dispose();
+    poseDetector.close();
     interpreter.close();
-    tts.stop();
-    handsDetector.close();
     speech.stop();
+    tts.stop();
     super.dispose();
   }
 }
@@ -311,8 +351,8 @@ class _VideoScreenState extends State<VideoScreen> {
 
     controller = VideoPlayerController.asset(widget.path)
       ..initialize().then((_) {
-        controller.play();
         setState(() {});
+        controller.play();
       });
   }
 
