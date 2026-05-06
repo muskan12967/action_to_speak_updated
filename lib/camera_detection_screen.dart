@@ -8,6 +8,7 @@ import 'package:google_mlkit_pose_detection/google_mlkit_pose_detection.dart';
 import 'package:google_mlkit_commons/google_mlkit_commons.dart';
 import 'dart:math';
 import 'package:flutter/services.dart' show rootBundle;
+import 'dart:io';
 
 class CameraDetectionScreen extends StatefulWidget {
   @override
@@ -38,9 +39,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
 
   DateTime lastTrigger = DateTime.now();
 
-  // Model ke hisaab se sequence length 25 hai
   final int SEQ_LEN = 25;
-  // Features per frame: 20 landmarks × 3 = 60
   final int FEATURES_PER_FRAME = 60;
 
   final TextEditingController textController = TextEditingController();
@@ -58,7 +57,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     "talibeilm": "assets/videos/student.mp4",
   };
 
-  // Labels training ke waqt jis order mein the
   final List<String> labels = [
     "baap","dost","ghar","khandan",
     "kitaab","likhna","maa","parhna","talibeilm"
@@ -116,42 +114,51 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   Future loadModel() async {
     try {
       setState(() {
-        modelStatus = "Loading model from assets/model.tflite...";
+        modelStatus = "🔍 Checking for model file...";
       });
       
-      // Check if file exists
-      try {
-        final fileData = await rootBundle.load('assets/model.tflite');
-        print("✅ Model file found! Size: ${fileData.lengthInBytes} bytes");
-      } catch (e) {
-        print("❌ Model file not found: assets/model.tflite");
-        setState(() {
-          modelStatus = "❌ model.tflite not found in assets/";
-        });
-        _showModelErrorDialog();
-        return;
+      // Try multiple paths
+      List<String> modelPaths = [
+        'assets/model.tflite',
+        'assets/models/model.tflite',
+        'model.tflite',
+      ];
+      
+      bool modelFound = false;
+      
+      for (String path in modelPaths) {
+        try {
+          print("Trying to load from: $path");
+          final fileData = await rootBundle.load(path);
+          print("✅ File found at: $path, Size: ${fileData.lengthInBytes} bytes");
+          interpreter = await Interpreter.fromAsset(path);
+          print("✅ Model loaded successfully from: $path");
+          modelFound = true;
+          break;
+        } catch (e) {
+          print("❌ Failed to load from $path: $e");
+        }
       }
       
-      // Load model
-      interpreter = await Interpreter.fromAsset("assets/model.tflite");
-      
-      setState(() {
-        isModelLoaded = true;
-        modelStatus = "✅ Model ready";
-      });
-      
-      print("✅ Model loaded successfully!");
-      
-      // Verify model input shape
-      var inputShape = interpreter!.getInputTensor(0).shape;
-      var outputShape = interpreter!.getOutputTensor(0).shape;
-      print("Model input shape: $inputShape");
-      print("Model output shape: $outputShape");
-      
-      // Expected: [1, 25, 60] or [25, 60]
-      if (inputShape.length >= 2) {
-        print("✅ Expected sequence length: ${inputShape[inputShape.length - 2]}");
-        print("✅ Expected features: ${inputShape[inputShape.length - 1]}");
+      if (modelFound && interpreter != null) {
+        setState(() {
+          isModelLoaded = true;
+          modelStatus = "✅ Model ready! Camera ready";
+        });
+        
+        // Get model details
+        var inputShape = interpreter!.getInputTensor(0).shape;
+        var outputShape = interpreter!.getOutputTensor(0).shape;
+        print("Model input shape: $inputShape");
+        print("Model output shape: $outputShape");
+        
+      } else {
+        setState(() {
+          isModelLoaded = false;
+          modelStatus = "❌ Model not found in assets/ folder";
+        });
+        print("❌ Could not load model from any path");
+        _showModelErrorDialog();
       }
       
     } catch (e) {
@@ -168,19 +175,33 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       showDialog(
         context: context,
+        barrierDismissible: false,
         builder: (context) => AlertDialog(
           title: Text("Model File Missing"),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text("model.tflite file not found!", style: TextStyle(fontWeight: FontWeight.bold)),
+              Text("model.tflite file not found!", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.red)),
               SizedBox(height: 10),
-              Text("Please ensure:"),
+              Text("Please ensure:", style: TextStyle(fontWeight: FontWeight.bold)),
               SizedBox(height: 5),
-              Text("1. model.tflite is in assets/ folder"),
-              Text("2. Path in pubspec.yaml is correct"),
-              Text("3. Run 'flutter clean' and 'flutter pub get'"),
+              Text("1. Copy 'model.tflite' to 'assets/' folder"),
+              Text("2. Update pubspec.yaml:"),
+              Container(
+                margin: EdgeInsets.all(8),
+                padding: EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade200,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  "flutter:\n  assets:\n    - assets/model.tflite",
+                  style: TextStyle(fontFamily: 'monospace', fontSize: 12),
+                ),
+              ),
+              Text("3. Run: flutter clean && flutter pub get"),
+              Text("4. Restart the app"),
             ],
           ),
           actions: [
@@ -195,6 +216,11 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   }
 
   Future initCamera() async {
+    if (!isModelLoaded) {
+      _showSnackBar("Model not loaded. Please fix model file.");
+      return;
+    }
+    
     try {
       final cams = await availableCameras();
       final frontCam = cams.firstWhere(
@@ -231,7 +257,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
       });
     } else {
       if (!isModelLoaded) {
-        _showSnackBar("Model not loaded yet. Please wait.");
+        _showSnackBar("Model not loaded yet. Please fix model file.");
         return;
       }
       setState(() => isCameraOn = true);
@@ -256,7 +282,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     return inputImage;
   }
 
-  // Exactly 20 landmarks as trained
   Future<List<double>> extractLandmarks(InputImage image) async {
     final poses = await poseDetector.processImage(image);
     if (poses.isEmpty) return List.filled(FEATURES_PER_FRAME, 0.0);
@@ -286,7 +311,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
 
     List<double> data = [];
 
-    // EXACTLY 20 LANDMARKS - same as training
     final points = [
       PoseLandmarkType.nose,
       PoseLandmarkType.leftEye,
@@ -314,7 +338,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
       final lm = primaryPose.landmarks[p];
 
       if (lm != null) {
-        // Normalize coordinates
         double normalizedX = (lm.x - shoulderCenterX) / torsoLength;
         double normalizedY = (lm.y - shoulderCenterY) / torsoLength;
         double normalizedZ = (lm.z ?? 0.0) / torsoLength;
@@ -325,7 +348,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
       }
     }
 
-    // Ensure exactly 60 features
     if (data.length > FEATURES_PER_FRAME) {
       data = data.sublist(0, FEATURES_PER_FRAME);
     } else if (data.length < FEATURES_PER_FRAME) {
@@ -335,45 +357,34 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     return data;
   }
 
-  // Model prediction with correct input shape
   String predict(List<List<double>> seq) {
     if (interpreter == null || !isModelLoaded) {
-      print("❌ Model not loaded!");
       return "unknown";
     }
     
     try {
-      // Input shape: [1, 25, 60] as trained
       List<List<List<double>>> input = [seq];
-      
-      // Output: [1, 9] for 9 classes
       var output = List.generate(1, (_) => List.filled(labels.length, 0.0));
       
-      // Run inference
       interpreter!.run(input, output);
       
-      // Find class with highest probability
-      int predictedClass = 0;
-      double maxConfidence = output[0][0];
+      int idx = 0;
+      double maxVal = output[0][0];
       
       for (int i = 0; i < labels.length; i++) {
-        if (output[0][i] > maxConfidence) {
-          maxConfidence = output[0][i];
-          predictedClass = i;
+        if (output[0][i] > maxVal) {
+          maxVal = output[0][i];
+          idx = i;
         }
       }
       
-      print("📊 Prediction: ${labels[predictedClass]} with confidence: ${maxConfidence.toStringAsFixed(3)}");
-      
-      // Threshold 0.5 for detection
-      if (maxConfidence > 0.5) {
-        return labels[predictedClass];
+      if (maxVal > 0.5) {
+        return labels[idx];
       }
-      
       return "unknown";
       
     } catch (e) {
-      print("❌ Prediction error: $e");
+      print("Prediction error: $e");
       return "unknown";
     }
   }
@@ -424,12 +435,10 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
 
         sequence.add(frame);
 
-        // Keep only last 25 frames (SEQ_LEN)
         if (sequence.length > SEQ_LEN) {
           sequence.removeAt(0);
         }
 
-        // When we have exactly 25 frames, predict
         if (sequence.length == SEQ_LEN && isModelLoaded) {
           String result = predict(sequence);
           final now = DateTime.now();
@@ -438,10 +447,8 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
             bool validHandCount = true;
             if (twoHandSigns.contains(result) && handCount < 2) {
               validHandCount = false;
-              print("⚠️ $result needs 2 hands, only $handCount detected");
             } else if (oneHandSigns.contains(result) && handCount == 0) {
               validHandCount = false;
-              print("⚠️ $result needs 1 hand, none detected");
             }
             
             double stability = checkSequenceStability(sequence);
@@ -569,8 +576,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     }
     
     String videoPath = signMap[key]!;
-    print("Playing video for: $key");
-    
     Navigator.push(
       context,
       MaterialPageRoute(
@@ -647,7 +652,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
       ),
       body: Column(
         children: [
-          // Camera Preview
           Expanded(
             flex: 2,
             child: Container(
@@ -682,7 +686,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
             ),
           ),
           
-          // Detected Text Display
           Container(
             margin: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             padding: EdgeInsets.all(12),
@@ -709,7 +712,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
             ),
           ),
           
-          // Text Input
           Padding(
             padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             child: Row(
@@ -747,7 +749,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
             ),
           ),
           
-          // Quick Chips
           Container(
             height: 50,
             margin: EdgeInsets.symmetric(horizontal: 16),
@@ -769,7 +770,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
             ),
           ),
           
-          // Control Buttons
           Padding(
             padding: EdgeInsets.all(16),
             child: Row(
