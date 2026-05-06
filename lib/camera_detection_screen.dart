@@ -7,6 +7,7 @@ import 'package:video_player/video_player.dart';
 import 'package:google_mlkit_pose_detection/google_mlkit_pose_detection.dart';
 import 'package:google_mlkit_commons/google_mlkit_commons.dart';
 import 'dart:math';
+import 'package:flutter/services.dart' show rootBundle;
 
 class CameraDetectionScreen extends StatefulWidget {
   @override
@@ -34,6 +35,8 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   String lastResult = "";
   String modelStatus = "Loading model...";
   String micStatus = "Mic off";
+  String speechOutput = ""; // Option 3: Text Output
+  String voiceInputText = ""; // Option 4: Voice Input
 
   DateTime lastTrigger = DateTime.now();
 
@@ -41,6 +44,12 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
 
   final TextEditingController textController = TextEditingController();
   final FocusNode textFocusNode = FocusNode();
+
+  // Option 3: Text output controller
+  final TextEditingController textOutputController = TextEditingController();
+  
+  // Option 4: Voice input status
+  bool isVoiceInputEnabled = false;
 
   final Map<String, String> signMap = {
     "baap": "assets/videos/father.mp4",
@@ -114,6 +123,19 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
         modelStatus = "Loading model from assets/model.tflite...";
       });
       
+      // First check if file exists
+      try {
+        final fileData = await rootBundle.load('assets/model.tflite');
+        print("✅ Model file found! Size: ${fileData.lengthInBytes} bytes");
+      } catch (e) {
+        print("❌ Model file not found: assets/model.tflite");
+        setState(() {
+          modelStatus = "❌ Model file not found in assets/";
+        });
+        _showModelErrorDialog();
+        return;
+      }
+      
       // Load model from asset
       interpreter = await Interpreter.fromAsset("assets/model.tflite");
       
@@ -129,12 +151,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
       var outputShape = interpreter!.getOutputTensor(0).shape;
       print("Model input shape: $inputShape");
       print("Model output shape: $outputShape");
-      
-      // Validate expected shape
-      if (inputShape.length >= 2) {
-        print("✅ Expected sequence length: ${inputShape[1]}");
-        print("✅ Expected features: ${inputShape[2]}");
-      }
       
     } catch (e) {
       setState(() {
@@ -314,7 +330,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     return data;
   }
 
-  // ==================== REAL MODEL PREDICTION (NO DEMO) ====================
   String predict(List<List<double>> seq) {
     if (interpreter == null || !isModelLoaded) {
       print("❌ Model not loaded! Cannot predict.");
@@ -322,16 +337,11 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     }
     
     try {
-      // Prepare input for model - shape [1, 25, 60]
       List<List<List<double>>> input = [seq];
-      
-      // Create output array
       var output = List.generate(1, (_) => List.filled(labels.length, 0.0));
       
-      // Run inference
       interpreter!.run(input, output);
       
-      // Find highest probability
       int idx = 0;
       double maxVal = output[0][0];
       
@@ -344,11 +354,9 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
       
       print("📊 Prediction: ${labels[idx]} with confidence: ${maxVal.toStringAsFixed(3)}");
       
-      // Confidence threshold (adjust as needed)
       if (maxVal > 0.5) {
         return labels[idx];
       }
-      
       return "unknown";
       
     } catch (e) {
@@ -415,10 +423,8 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
             bool validHandCount = true;
             if (twoHandSigns.contains(result) && handCount < 2) {
               validHandCount = false;
-              print("⚠️ $result needs 2 hands, only $handCount detected");
             } else if (oneHandSigns.contains(result) && handCount == 0) {
               validHandCount = false;
-              print("⚠️ $result needs 1 hand, none detected");
             }
             
             double stability = checkSequenceStability(sequence);
@@ -433,14 +439,13 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
 
               setState(() {
                 detectedText = result;
+                // Option 3: Update text output
+                speechOutput = "Detected: $result";
+                textOutputController.text = speechOutput;
               });
 
-              print("✅ Sign Detected: $result (hands: $handCount, stability: ${stability.toStringAsFixed(2)})");
-              
-              // Speak the result
+              print("✅ Sign Detected: $result");
               await tts.speak(result);
-              
-              // Show video
               _showVideo(result);
             }
           }
@@ -453,6 +458,63 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     });
 
     isStreamActive = true;
+  }
+
+  // Option 3: Manual text output
+  void setTextOutput(String text) {
+    setState(() {
+      speechOutput = text;
+      textOutputController.text = text;
+    });
+    tts.speak(text);
+  }
+
+  void clearTextOutput() {
+    setState(() {
+      speechOutput = "";
+      textOutputController.clear();
+    });
+  }
+
+  // Option 4: Voice to Text (for hearing people to speak)
+  void startVoiceInput() async {
+    bool available = await speech.initialize();
+    if (available) {
+      setState(() {
+        isVoiceInputEnabled = true;
+        voiceInputText = "Listening...";
+      });
+      
+      speech.listen(
+        onResult: (result) {
+          setState(() {
+            voiceInputText = result.recognizedWords;
+          });
+          print("Voice Input: ${result.recognizedWords}");
+          
+          // Process voice input
+          handleTextInput(result.recognizedWords);
+          
+          speech.stop();
+          setState(() {
+            isVoiceInputEnabled = false;
+          });
+        },
+        onDevice: true,
+      );
+      
+      _showSnackBar("Speak now...");
+    } else {
+      _showSnackBar("Speech recognition not available");
+    }
+  }
+
+  void stopVoiceInput() {
+    speech.stop();
+    setState(() {
+      isVoiceInputEnabled = false;
+      voiceInputText = "";
+    });
   }
 
   void handleTextInput(String text) {
@@ -468,12 +530,19 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     String? matchedKey = _findMatch(input);
     
     if (matchedKey != null) {
-      setState(() => detectedText = matchedKey);
+      setState(() {
+        detectedText = matchedKey;
+        // Option 3: Update text output
+        speechOutput = "Word: $matchedKey";
+        textOutputController.text = speechOutput;
+      });
       tts.speak("یہ $matchedKey کا اشارہ ہے");
       _showVideo(matchedKey);
     } else {
       setState(() {
         detectedText = "No match found for: $input";
+        speechOutput = "No match found";
+        textOutputController.text = speechOutput;
       });
       tts.speak("معاف کیجئے، یہ لفظ نہیں ملا");
       _showSnackBar("'$input' not found in vocabulary");
@@ -481,19 +550,16 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   }
 
   String? _findMatch(String input) {
-    // Direct match
     if (signMap.containsKey(input)) {
       return input;
     }
     
-    // Check synonyms
     for (var entry in urduSynonyms.entries) {
       if (entry.value.contains(input)) {
         return entry.key;
       }
     }
     
-    // Partial match
     for (var key in signMap.keys) {
       if (input.contains(key) || key.contains(input)) {
         return key;
@@ -561,7 +627,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
         builder: (_) => VideoScreen(videoPath, key),
       ),
     ).then((_) {
-      // Reset detection after video returns
       Future.delayed(Duration(milliseconds: 500), () {
         lastResult = "";
         sequence.clear();
@@ -599,9 +664,13 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
             SizedBox(height: 8),
             Text("2. ✍️ Type words in Roman Urdu (e.g., 'baap', 'dost')"),
             SizedBox(height: 8),
-            Text("3. 🎤 Click mic to speak"),
+            Text("3. 📝 Text Output shows detected word"),
             SizedBox(height: 8),
-            Text("4. Available words:"),
+            Text("4. 🎤 Voice Input (Speak to convert to sign)"),
+            SizedBox(height: 8),
+            Text("5. 🔊 Mic button for voice commands"),
+            SizedBox(height: 8),
+            Text("6. Available words:"),
             SizedBox(height: 8),
             Wrap(
               spacing: 8,
@@ -640,6 +709,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
       ),
       body: Column(
         children: [
+          // Camera Preview (Option 1)
           Expanded(
             flex: 2,
             child: Container(
@@ -674,6 +744,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
             ),
           ),
           
+          // Detected Sign Display (Option 2)
           Container(
             margin: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             padding: EdgeInsets.all(12),
@@ -688,7 +759,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
                 SizedBox(width: 10),
                 Expanded(
                   child: Text(
-                    detectedText.isEmpty ? "No sign detected yet" : detectedText,
+                    detectedText.isEmpty ? "No sign detected yet" : "Sign: $detectedText",
                     style: TextStyle(
                       fontSize: 18,
                       fontWeight: FontWeight.bold,
@@ -699,7 +770,145 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
               ],
             ),
           ),
+
+          // Option 3: Text Output Section
+          Container(
+            margin: EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+            padding: EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.green.shade50,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: Colors.green.shade200),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(Icons.text_fields, color: Colors.green),
+                    SizedBox(width: 8),
+                    Text(
+                      "📝 Text Output (Option 3)",
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        color: Colors.green.shade800,
+                      ),
+                    ),
+                  ],
+                ),
+                SizedBox(height: 8),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: textOutputController,
+                        decoration: InputDecoration(
+                          hintText: "Detected text will appear here",
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                        ),
+                        readOnly: true,
+                      ),
+                    ),
+                    SizedBox(width: 8),
+                    IconButton(
+                      icon: Icon(Icons.volume_up, color: Colors.green),
+                      onPressed: () {
+                        if (speechOutput.isNotEmpty) {
+                          tts.speak(speechOutput);
+                        }
+                      },
+                    ),
+                    IconButton(
+                      icon: Icon(Icons.clear, color: Colors.red),
+                      onPressed: clearTextOutput,
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+
+          // Option 4: Voice Input Section
+          Container(
+            margin: EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+            padding: EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.purple.shade50,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: Colors.purple.shade200),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(Icons.mic, color: Colors.purple),
+                    SizedBox(width: 8),
+                    Text(
+                      "🎤 Voice Input (Option 4) - Speak to convert to sign",
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        color: Colors.purple.shade800,
+                      ),
+                    ),
+                  ],
+                ),
+                SizedBox(height: 8),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Container(
+                        padding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                        decoration: BoxDecoration(
+                          border: Border.all(color: Colors.grey.shade300),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Text(
+                          voiceInputText.isEmpty ? "Click mic button and speak" : voiceInputText,
+                          style: TextStyle(
+                            fontSize: 14,
+                            color: voiceInputText.isEmpty ? Colors.grey : Colors.black,
+                          ),
+                        ),
+                      ),
+                    ),
+                    SizedBox(width: 8),
+                    if (!isVoiceInputEnabled)
+                      IconButton(
+                        icon: Icon(Icons.mic, color: Colors.purple, size: 30),
+                        onPressed: startVoiceInput,
+                      ),
+                    if (isVoiceInputEnabled)
+                      Stack(
+                        children: [
+                          IconButton(
+                            icon: Icon(Icons.mic, color: Colors.red, size: 30),
+                            onPressed: stopVoiceInput,
+                          ),
+                          Positioned(
+                            right: 0,
+                            top: 0,
+                            child: Container(
+                              width: 10,
+                              height: 10,
+                              decoration: BoxDecoration(
+                                color: Colors.red,
+                                shape: BoxShape.circle,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                  ],
+                ),
+              ],
+            ),
+          ),
           
+          // Text Input Row (Roman Urdu)
           Padding(
             padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             child: Row(
@@ -709,7 +918,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
                     controller: textController,
                     focusNode: textFocusNode,
                     decoration: InputDecoration(
-                      hintText: "Type in Roman Urdu (e.g., baap, dost, ghar)",
+                      hintText: "Type Roman Urdu (e.g., baap, dost, ghar)",
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(8),
                       ),
@@ -743,6 +952,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
             ),
           ),
           
+          // Quick Action Chips
           Container(
             height: 50,
             margin: EdgeInsets.symmetric(horizontal: 16),
@@ -764,11 +974,13 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
             ),
           ),
           
+          // Control Buttons
           Padding(
             padding: EdgeInsets.all(16),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceEvenly,
               children: [
+                // Camera Button
                 Column(
                   children: [
                     IconButton(
@@ -783,6 +995,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
                   ],
                 ),
                 
+                // Mic Button for Voice Search
                 Column(
                   children: [
                     Stack(
@@ -814,6 +1027,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
                   ],
                 ),
                 
+                // Help Button
                 Column(
                   children: [
                     IconButton(
@@ -839,6 +1053,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     tts.stop();
     speech.stop();
     textController.dispose();
+    textOutputController.dispose();
     textFocusNode.dispose();
     super.dispose();
   }
