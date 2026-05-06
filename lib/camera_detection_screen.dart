@@ -113,14 +113,14 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   Future loadModel() async {
   try {
     setState(() {
-      modelStatus = "Loading model from assets/models/model.tflite...";
+      modelStatus = "Loading model from assets/model.tflite...";
     });
     
     // Try multiple paths
     List<String> modelPaths = [
-      "assets/models/model.tflite",  // Preferred path
-      "assets/model.tflite",          // Alternative path
-      "model.tflite",                  // Root path
+      
+      "assets/model.tflite"      // Alternative path
+     
     ];
     
     bool modelLoaded = false;
