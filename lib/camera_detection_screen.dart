@@ -114,28 +114,44 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   }
 
   // ================= FIXED HAND LANDMARKS =================
-  Future<List<double>> extractLandmarks(InputImage image) async {
+ Future<List<double>> extractLandmarks(InputImage image) async {
 
-    final result = await handLandmarker.processImage(image);
+  final poses = await poseDetector.processImage(image);
 
-    if (result.handLandmarks.isEmpty) {
-      return List.filled(63, 0.0);
+  if (poses.isEmpty) return List.filled(63, 0.0);
+
+  final pose = poses.first;
+
+  List<double> data = [];
+
+  // IMPORTANT: FIXED MediaPipe-style order approximation
+  final points = [
+    PoseLandmarkType.leftWrist,
+    PoseLandmarkType.rightWrist,
+    PoseLandmarkType.leftElbow,
+    PoseLandmarkType.rightElbow,
+    PoseLandmarkType.leftShoulder,
+    PoseLandmarkType.rightShoulder,
+    PoseLandmarkType.nose,
+  ];
+
+  for (final p in points) {
+    final lm = pose.landmarks[p];
+
+    if (lm != null) {
+      data.addAll([lm.x, lm.y, lm.z ?? 0.0]);
+    } else {
+      data.addAll([0.0, 0.0, 0.0]);
     }
-
-    final hand = result.handLandmarks.first;
-
-    List<double> data = [];
-
-    // EXACT same order as your Python MediaPipe Hands
-    for (final lm in hand) {
-      data.add(lm.x);
-      data.add(lm.y);
-      data.add(lm.z ?? 0.0);
-    }
-
-    return data; // 63 values
   }
 
+  // pad to match training size
+  while (data.length < 63) {
+    data.add(0.0);
+  }
+
+  return data;
+}
   // ================= INPUT IMAGE =================
   InputImage inputImageFromCamera(
       CameraImage image,
