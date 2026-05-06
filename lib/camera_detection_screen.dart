@@ -112,28 +112,23 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   }
 
   // ================= IMAGE =================
-  InputImage inputImageFromCamera(
-      CameraImage image,
-      CameraDescription camera,
-  ) {
-    final WriteBuffer buffer = WriteBuffer();
-
-    for (final plane in image.planes) {
-      buffer.putUint8List(plane.bytes);
-    }
-
-    final bytes = buffer.done().buffer.asUint8List();
-
-    return InputImage.fromBytes(
-      bytes: bytes,
-      metadata: InputImageMetadata(
+  InputImage inputImageFromCamera( 
+    CameraImage image, CameraDescription camera) {
+    final plane = image.planes[0];
+    final inputImage = InputImage.fromBytes ( 
+      bytes: plane.bytes,
+      metadata: InputImageMetadata( 
         size: Size(image.width.toDouble(), image.height.toDouble()),
         rotation: InputImageRotationValue.fromRawValue(camera.sensorOrientation)
-            ?? InputImageRotation.rotation0deg,
-        format: InputImageFormat.nv21,
-        bytesPerRow: image.planes[0].bytesPerRow,
-      ),
-    );
+        ?? 
+        InputImageRotation.rotation0deg,
+        format: InputImageFormatValue.fromRawValue(image.format.raw)
+        ?? 
+        
+        InputImageFormat.nv21, 
+        bytesPerRow: plane.bytesPerRow, ),
+    ); 
+    return inputImage;
   }
 
   // ================= LANDMARK FIX (STABLE + WORKING) =================
