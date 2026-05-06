@@ -111,35 +111,101 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   }
 
   Future loadModel() async {
-    try {
-      setState(() {
-        modelStatus = "Loading model...";
-      });
-      
-      interpreter = await Interpreter.fromAsset("assets/model.tflite");
-      
+  try {
+    setState(() {
+      modelStatus = "Loading model from assets/models/model.tflite...";
+    });
+    
+    // Try multiple paths
+    List<String> modelPaths = [
+      "assets/models/model.tflite",  // Preferred path
+      "assets/model.tflite",          // Alternative path
+      "model.tflite",                  // Root path
+    ];
+    
+    bool modelLoaded = false;
+    
+    for (String path in modelPaths) {
+      try {
+        print("Trying to load model from: $path");
+        interpreter = await Interpreter.fromAsset(path);
+        print("✅ Model loaded successfully from: $path");
+        modelLoaded = true;
+        break;
+      } catch (e) {
+        print("Failed to load from $path: $e");
+      }
+    }
+    
+    if (modelLoaded && interpreter != null) {
       setState(() {
         isModelLoaded = true;
         modelStatus = "✅ Model ready";
       });
       
-      print("✅ Model loaded successfully");
+      // Get model details
+      var inputShape = interpreter!.getInputTensor(0).shape;
+      var outputShape = interpreter!.getOutputTensor(0).shape;
+      print("Model input shape: $inputShape");
+      print("Model output shape: $outputShape");
       
-      if (interpreter != null) {
-        var inputShape = interpreter!.getInputTensor(0).shape;
-        var outputShape = interpreter!.getOutputTensor(0).shape;
-        print("Model input shape: $inputShape");
-        print("Model output shape: $outputShape");
+      // Validate expected shape
+      if (inputShape.length >= 2) {
+        print("✅ Expected sequence length: ${inputShape[1]}");
+        print("✅ Expected features: ${inputShape[2]}");
       }
       
-    } catch (e) {
+    } else {
       setState(() {
         isModelLoaded = false;
-        modelStatus = "❌ Model load failed";
+        modelStatus = "❌ Model file not found! Check assets";
       });
-      print("❌ Error loading model: $e");
+      print("❌ Could not load model from any path");
+      
+      // Show dialog to help user
+      _showModelErrorDialog();
     }
+    
+  } catch (e) {
+    setState(() {
+      isModelLoaded = false;
+      modelStatus = "❌ Model load error: ${e.toString().substring(0, 30)}...";
+    });
+    print("❌ Error loading model: $e");
+    _showModelErrorDialog();
   }
+}
+
+void _showModelErrorDialog() {
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text("Model File Missing"),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text("model.tflite file not found!", style: TextStyle(fontWeight: FontWeight.bold)),
+            SizedBox(height: 10),
+            Text("Please ensure:"),
+            SizedBox(height: 5),
+            Text("1. model.tflite is in assets/models/ folder"),
+            Text("2. Path in pubspec.yaml is correct"),
+            Text("3. Run 'flutter clean' and 'flutter pub get'"),
+            Text("4. Restart the app"),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text("OK"),
+          ),
+        ],
+      ),
+    );
+  });
+}
 
   Future initCamera() async {
     final cams = await availableCameras();
@@ -161,26 +227,27 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     }
   }
 
-  Future toggleCamera() async {
-    if (isCameraOn) {
-      await controller?.stopImageStream();
-      await controller?.dispose();
-      controller = null;
+ Future toggleCamera() async {
+  if (isCameraOn) {
+    await controller?.stopImageStream();
+    await controller?.dispose();
+    controller = null;
 
-      setState(() {
-        isCameraOn = false;
-        isStreamActive = false;
-      });
-    } else {
-      if (!isModelLoaded) {
-        _showSnackBar("Model is loading, please wait...");
-        return;
-      }
-      setState(() => isCameraOn = true);
-      await initCamera();
+    setState(() {
+      isCameraOn = false;
+      isStreamActive = false;
+    });
+  } else {
+    // Check if model is loaded before turning on camera
+    if (!isModelLoaded) {
+      _showSnackBar("Model is still loading or failed to load. Please restart app.");
+      print("Model status: $modelStatus");
+      return;
     }
+    setState(() => isCameraOn = true);
+    await initCamera();
   }
-
+}
   InputImage inputImageFromCamera(
     CameraImage image, CameraDescription camera) { 
     final plane = image.planes[0]; 
