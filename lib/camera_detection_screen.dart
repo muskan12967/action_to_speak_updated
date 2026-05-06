@@ -7,8 +7,6 @@ import 'package:video_player/video_player.dart';
 import 'package:google_mlkit_pose_detection/google_mlkit_pose_detection.dart';
 import 'package:google_mlkit_commons/google_mlkit_commons.dart';
 import 'dart:math';
-import 'dart:io';
-import 'package:path_provider/path_provider.dart';
 
 class CameraDetectionScreen extends StatefulWidget {
   @override
@@ -117,35 +115,66 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
       });
       
       // Load model from asset
-      try {
-        interpreter = await Interpreter.fromAsset("assets/model.tflite");
-        setState(() {
-          isModelLoaded = true;
-          modelStatus = "✅ Model ready";
-        });
-        print("✅ Model loaded successfully from assets/model.tflite");
-        
-        // Get model details
-        var inputShape = interpreter!.getInputTensor(0).shape;
-        var outputShape = interpreter!.getOutputTensor(0).shape;
-        print("Model input shape: $inputShape");
-        print("Model output shape: $outputShape");
-        
-      } catch (e) {
-        print("Failed to load model: $e");
-        setState(() {
-          isModelLoaded = true; // Demo mode
-          modelStatus = "⚠️ Demo mode (using fallback)";
-        });
+      interpreter = await Interpreter.fromAsset("assets/model.tflite");
+      
+      setState(() {
+        isModelLoaded = true;
+        modelStatus = "✅ Model ready";
+      });
+      
+      print("✅ Model loaded successfully from assets/model.tflite");
+      
+      // Get model details
+      var inputShape = interpreter!.getInputTensor(0).shape;
+      var outputShape = interpreter!.getOutputTensor(0).shape;
+      print("Model input shape: $inputShape");
+      print("Model output shape: $outputShape");
+      
+      // Validate expected shape
+      if (inputShape.length >= 2) {
+        print("✅ Expected sequence length: ${inputShape[1]}");
+        print("✅ Expected features: ${inputShape[2]}");
       }
       
     } catch (e) {
       setState(() {
-        isModelLoaded = true; // Demo mode
-        modelStatus = "⚠️ Demo mode active";
+        isModelLoaded = false;
+        modelStatus = "❌ Model load failed: ${e.toString().substring(0, 40)}";
       });
-      print("⚠️ Running in demo mode: $e");
+      print("❌ Error loading model: $e");
+      _showModelErrorDialog();
     }
+  }
+
+  void _showModelErrorDialog() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      showDialog(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text("Model File Missing"),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text("model.tflite file not found!", style: TextStyle(fontWeight: FontWeight.bold)),
+              SizedBox(height: 10),
+              Text("Please ensure:"),
+              SizedBox(height: 5),
+              Text("1. model.tflite is in assets/ folder"),
+              Text("2. Path in pubspec.yaml is correct"),
+              Text("3. Run 'flutter clean' and 'flutter pub get'"),
+              Text("4. Restart the app"),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: Text("OK"),
+            ),
+          ],
+        ),
+      );
+    });
   }
 
   Future initCamera() async {
@@ -164,7 +193,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
       await controller!.initialize();
       setState(() {});
 
-      if (!isStreamActive) {
+      if (!isStreamActive && isModelLoaded) {
         startStream();
       }
     } catch (e) {
@@ -184,6 +213,10 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
         isStreamActive = false;
       });
     } else {
+      if (!isModelLoaded) {
+        _showSnackBar("Model not loaded yet. Please wait or restart app.");
+        return;
+      }
       setState(() => isCameraOn = true);
       await initCamera();
     }
@@ -281,18 +314,19 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     return data;
   }
 
+  // ==================== REAL MODEL PREDICTION (NO DEMO) ====================
   String predict(List<List<double>> seq) {
-    // Demo mode - return sign based on sequence pattern
-    if (interpreter == null) {
-      return demoPrediction(seq);
+    if (interpreter == null || !isModelLoaded) {
+      print("❌ Model not loaded! Cannot predict.");
+      return "unknown";
     }
     
     try {
-      // Prepare input for model
+      // Prepare input for model - shape [1, 25, 60]
       List<List<List<double>>> input = [seq];
       
       // Create output array
-      var output = List.filled(1, List.filled(labels.length, 0.0));
+      var output = List.generate(1, (_) => List.filled(labels.length, 0.0));
       
       // Run inference
       interpreter!.run(input, output);
@@ -308,41 +342,19 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
         }
       }
       
-      print("Prediction: ${labels[idx]} with confidence: $maxVal");
+      print("📊 Prediction: ${labels[idx]} with confidence: ${maxVal.toStringAsFixed(3)}");
       
+      // Confidence threshold (adjust as needed)
       if (maxVal > 0.5) {
         return labels[idx];
       }
+      
       return "unknown";
       
     } catch (e) {
-      print("Prediction error: $e");
-      return demoPrediction(seq);
+      print("❌ Prediction error: $e");
+      return "unknown";
     }
-  }
-  
-  String demoPrediction(List<List<double>> seq) {
-    // For demo, return a sign based on movement pattern
-    if (seq.length < 10) return "unknown";
-    
-    // Calculate movement energy
-    double movement = 0;
-    int startFrame = max(0, seq.length - 15);
-    
-    for (int i = startFrame; i < seq.length - 1; i++) {
-      for (int j = 0; j < 30; j++) {
-        movement += (seq[i+1][j] - seq[i][j]).abs();
-      }
-    }
-    
-    if (movement > 3.0) {
-      // Return different signs in sequence for demo
-      List<String> demoSigns = ["maa", "baap", "ghar", "dost", "kitaab"];
-      int index = DateTime.now().second % demoSigns.length;
-      return demoSigns[index];
-    }
-    
-    return "unknown";
   }
 
   double checkSequenceStability(List<List<double>> seq) {
@@ -378,7 +390,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   }
 
   void startStream() {
-    if (controller == null || isStreamActive) return;
+    if (controller == null || isStreamActive || !isModelLoaded) return;
 
     controller!.startImageStream((image) async {
       if (isProcessing) return;
@@ -395,7 +407,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
           sequence.removeAt(0);
         }
 
-        if (sequence.length == SEQ_LEN) {
+        if (sequence.length == SEQ_LEN && isModelLoaded) {
           String result = predict(sequence);
           final now = DateTime.now();
 
@@ -535,6 +547,11 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   }
 
   void _showVideo(String key) {
+    if (!signMap.containsKey(key)) {
+      _showSnackBar("Video not found for: $key");
+      return;
+    }
+    
     String videoPath = signMap[key]!;
     print("Playing video for: $key at path: $videoPath");
     
@@ -544,7 +561,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
         builder: (_) => VideoScreen(videoPath, key),
       ),
     ).then((_) {
-      // Reset detection after video
+      // Reset detection after video returns
       Future.delayed(Duration(milliseconds: 500), () {
         lastResult = "";
         sequence.clear();
