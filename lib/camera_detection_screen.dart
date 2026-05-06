@@ -35,21 +35,16 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   String lastResult = "";
   String modelStatus = "Loading model...";
   String micStatus = "Mic off";
-  String speechOutput = ""; // Option 3: Text Output
-  String voiceInputText = ""; // Option 4: Voice Input
 
   DateTime lastTrigger = DateTime.now();
 
+  // Model ke hisaab se sequence length 25 hai
   final int SEQ_LEN = 25;
+  // Features per frame: 20 landmarks × 3 = 60
+  final int FEATURES_PER_FRAME = 60;
 
   final TextEditingController textController = TextEditingController();
   final FocusNode textFocusNode = FocusNode();
-
-  // Option 3: Text output controller
-  final TextEditingController textOutputController = TextEditingController();
-  
-  // Option 4: Voice input status
-  bool isVoiceInputEnabled = false;
 
   final Map<String, String> signMap = {
     "baap": "assets/videos/father.mp4",
@@ -63,6 +58,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     "talibeilm": "assets/videos/student.mp4",
   };
 
+  // Labels training ke waqt jis order mein the
   final List<String> labels = [
     "baap","dost","ghar","khandan",
     "kitaab","likhna","maa","parhna","talibeilm"
@@ -71,13 +67,13 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   final Map<String, List<String>> urduSynonyms = {
     "baap": ["baap", "father", "dad", "papa", "walid", "aba", "bap"],
     "dost": ["dost", "friend", "yaar", "companion", "saathi", "dosta"],
-    "ghar": ["ghar", "home", "house", "makan", "residence", "ghar"],
+    "ghar": ["ghar", "home", "house", "makan", "residence"],
     "khandan": ["khandan", "family", "gharana", "rishtedaar", "khandaan"],
-    "kitaab": ["kitaab", "book", "kitab", "pustak", "book"],
+    "kitaab": ["kitaab", "book", "kitab", "pustak"],
     "likhna": ["likhna", "write", "likhai", "likaai", "likho"],
     "maa": ["maa", "mother", "mom", "amma", "walida", "mama"],
     "parhna": ["parhna", "read", "study", "padhai", "mutalia", "parho"],
-    "talibeilm": ["talibeilm", "student", "talib-e-ilam", "shagird", "student"],
+    "talibeilm": ["talibeilm", "student", "talib-e-ilam", "shagird"],
   };
 
   final Set<String> twoHandSigns = {"likhna", "dost", "khandan", "parhna", "ghar", "kitaab"};
@@ -123,20 +119,20 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
         modelStatus = "Loading model from assets/model.tflite...";
       });
       
-      // First check if file exists
+      // Check if file exists
       try {
         final fileData = await rootBundle.load('assets/model.tflite');
         print("✅ Model file found! Size: ${fileData.lengthInBytes} bytes");
       } catch (e) {
         print("❌ Model file not found: assets/model.tflite");
         setState(() {
-          modelStatus = "❌ Model file not found in assets/";
+          modelStatus = "❌ model.tflite not found in assets/";
         });
         _showModelErrorDialog();
         return;
       }
       
-      // Load model from asset
+      // Load model
       interpreter = await Interpreter.fromAsset("assets/model.tflite");
       
       setState(() {
@@ -144,18 +140,24 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
         modelStatus = "✅ Model ready";
       });
       
-      print("✅ Model loaded successfully from assets/model.tflite");
+      print("✅ Model loaded successfully!");
       
-      // Get model details
+      // Verify model input shape
       var inputShape = interpreter!.getInputTensor(0).shape;
       var outputShape = interpreter!.getOutputTensor(0).shape;
       print("Model input shape: $inputShape");
       print("Model output shape: $outputShape");
       
+      // Expected: [1, 25, 60] or [25, 60]
+      if (inputShape.length >= 2) {
+        print("✅ Expected sequence length: ${inputShape[inputShape.length - 2]}");
+        print("✅ Expected features: ${inputShape[inputShape.length - 1]}");
+      }
+      
     } catch (e) {
       setState(() {
         isModelLoaded = false;
-        modelStatus = "❌ Model load failed: ${e.toString().substring(0, 40)}";
+        modelStatus = "❌ Error: ${e.toString().substring(0, 35)}";
       });
       print("❌ Error loading model: $e");
       _showModelErrorDialog();
@@ -179,7 +181,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
               Text("1. model.tflite is in assets/ folder"),
               Text("2. Path in pubspec.yaml is correct"),
               Text("3. Run 'flutter clean' and 'flutter pub get'"),
-              Text("4. Restart the app"),
             ],
           ),
           actions: [
@@ -230,7 +231,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
       });
     } else {
       if (!isModelLoaded) {
-        _showSnackBar("Model not loaded yet. Please wait or restart app.");
+        _showSnackBar("Model not loaded yet. Please wait.");
         return;
       }
       setState(() => isCameraOn = true);
@@ -255,9 +256,10 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     return inputImage;
   }
 
+  // Exactly 20 landmarks as trained
   Future<List<double>> extractLandmarks(InputImage image) async {
     final poses = await poseDetector.processImage(image);
-    if (poses.isEmpty) return List.filled(60, 0.0);
+    if (poses.isEmpty) return List.filled(FEATURES_PER_FRAME, 0.0);
 
     final primaryPose = poses.first;
     
@@ -284,6 +286,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
 
     List<double> data = [];
 
+    // EXACTLY 20 LANDMARKS - same as training
     final points = [
       PoseLandmarkType.nose,
       PoseLandmarkType.leftEye,
@@ -311,6 +314,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
       final lm = primaryPose.landmarks[p];
 
       if (lm != null) {
+        // Normalize coordinates
         double normalizedX = (lm.x - shoulderCenterX) / torsoLength;
         double normalizedY = (lm.y - shoulderCenterY) / torsoLength;
         double normalizedZ = (lm.z ?? 0.0) / torsoLength;
@@ -321,42 +325,51 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
       }
     }
 
-    if (data.length > 60) {
-      data = data.sublist(0, 60);
-    } else if (data.length < 60) {
-      data.addAll(List.filled(60 - data.length, 0.0));
+    // Ensure exactly 60 features
+    if (data.length > FEATURES_PER_FRAME) {
+      data = data.sublist(0, FEATURES_PER_FRAME);
+    } else if (data.length < FEATURES_PER_FRAME) {
+      data.addAll(List.filled(FEATURES_PER_FRAME - data.length, 0.0));
     }
 
     return data;
   }
 
+  // Model prediction with correct input shape
   String predict(List<List<double>> seq) {
     if (interpreter == null || !isModelLoaded) {
-      print("❌ Model not loaded! Cannot predict.");
+      print("❌ Model not loaded!");
       return "unknown";
     }
     
     try {
+      // Input shape: [1, 25, 60] as trained
       List<List<List<double>>> input = [seq];
+      
+      // Output: [1, 9] for 9 classes
       var output = List.generate(1, (_) => List.filled(labels.length, 0.0));
       
+      // Run inference
       interpreter!.run(input, output);
       
-      int idx = 0;
-      double maxVal = output[0][0];
+      // Find class with highest probability
+      int predictedClass = 0;
+      double maxConfidence = output[0][0];
       
       for (int i = 0; i < labels.length; i++) {
-        if (output[0][i] > maxVal) {
-          maxVal = output[0][i];
-          idx = i;
+        if (output[0][i] > maxConfidence) {
+          maxConfidence = output[0][i];
+          predictedClass = i;
         }
       }
       
-      print("📊 Prediction: ${labels[idx]} with confidence: ${maxVal.toStringAsFixed(3)}");
+      print("📊 Prediction: ${labels[predictedClass]} with confidence: ${maxConfidence.toStringAsFixed(3)}");
       
-      if (maxVal > 0.5) {
-        return labels[idx];
+      // Threshold 0.5 for detection
+      if (maxConfidence > 0.5) {
+        return labels[predictedClass];
       }
+      
       return "unknown";
       
     } catch (e) {
@@ -411,10 +424,12 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
 
         sequence.add(frame);
 
+        // Keep only last 25 frames (SEQ_LEN)
         if (sequence.length > SEQ_LEN) {
           sequence.removeAt(0);
         }
 
+        // When we have exactly 25 frames, predict
         if (sequence.length == SEQ_LEN && isModelLoaded) {
           String result = predict(sequence);
           final now = DateTime.now();
@@ -423,15 +438,17 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
             bool validHandCount = true;
             if (twoHandSigns.contains(result) && handCount < 2) {
               validHandCount = false;
+              print("⚠️ $result needs 2 hands, only $handCount detected");
             } else if (oneHandSigns.contains(result) && handCount == 0) {
               validHandCount = false;
+              print("⚠️ $result needs 1 hand, none detected");
             }
             
             double stability = checkSequenceStability(sequence);
             
             if (validHandCount && 
                 result != lastResult &&
-                now.difference(lastTrigger).inMilliseconds > 1800 &&
+                now.difference(lastTrigger).inMilliseconds > 1500 &&
                 stability > 0.3) {
 
               lastResult = result;
@@ -439,9 +456,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
 
               setState(() {
                 detectedText = result;
-                // Option 3: Update text output
-                speechOutput = "Detected: $result";
-                textOutputController.text = speechOutput;
               });
 
               print("✅ Sign Detected: $result");
@@ -460,63 +474,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     isStreamActive = true;
   }
 
-  // Option 3: Manual text output
-  void setTextOutput(String text) {
-    setState(() {
-      speechOutput = text;
-      textOutputController.text = text;
-    });
-    tts.speak(text);
-  }
-
-  void clearTextOutput() {
-    setState(() {
-      speechOutput = "";
-      textOutputController.clear();
-    });
-  }
-
-  // Option 4: Voice to Text (for hearing people to speak)
-  void startVoiceInput() async {
-    bool available = await speech.initialize();
-    if (available) {
-      setState(() {
-        isVoiceInputEnabled = true;
-        voiceInputText = "Listening...";
-      });
-      
-      speech.listen(
-        onResult: (result) {
-          setState(() {
-            voiceInputText = result.recognizedWords;
-          });
-          print("Voice Input: ${result.recognizedWords}");
-          
-          // Process voice input
-          handleTextInput(result.recognizedWords);
-          
-          speech.stop();
-          setState(() {
-            isVoiceInputEnabled = false;
-          });
-        },
-        onDevice: true,
-      );
-      
-      _showSnackBar("Speak now...");
-    } else {
-      _showSnackBar("Speech recognition not available");
-    }
-  }
-
-  void stopVoiceInput() {
-    speech.stop();
-    setState(() {
-      isVoiceInputEnabled = false;
-      voiceInputText = "";
-    });
-  }
-
   void handleTextInput(String text) {
     String input = text.toLowerCase().trim();
     if (input.isEmpty) {
@@ -530,19 +487,12 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     String? matchedKey = _findMatch(input);
     
     if (matchedKey != null) {
-      setState(() {
-        detectedText = matchedKey;
-        // Option 3: Update text output
-        speechOutput = "Word: $matchedKey";
-        textOutputController.text = speechOutput;
-      });
+      setState(() => detectedText = matchedKey);
       tts.speak("یہ $matchedKey کا اشارہ ہے");
       _showVideo(matchedKey);
     } else {
       setState(() {
         detectedText = "No match found for: $input";
-        speechOutput = "No match found";
-        textOutputController.text = speechOutput;
       });
       tts.speak("معاف کیجئے، یہ لفظ نہیں ملا");
       _showSnackBar("'$input' not found in vocabulary");
@@ -619,19 +569,14 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     }
     
     String videoPath = signMap[key]!;
-    print("Playing video for: $key at path: $videoPath");
+    print("Playing video for: $key");
     
     Navigator.push(
       context,
       MaterialPageRoute(
         builder: (_) => VideoScreen(videoPath, key),
       ),
-    ).then((_) {
-      Future.delayed(Duration(milliseconds: 500), () {
-        lastResult = "";
-        sequence.clear();
-      });
-    });
+    );
   }
 
   void _showSnackBar(String message) {
@@ -661,16 +606,9 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text("1. 📷 Turn ON camera to detect signs"),
-            SizedBox(height: 8),
-            Text("2. ✍️ Type words in Roman Urdu (e.g., 'baap', 'dost')"),
-            SizedBox(height: 8),
-            Text("3. 📝 Text Output shows detected word"),
-            SizedBox(height: 8),
-            Text("4. 🎤 Voice Input (Speak to convert to sign)"),
-            SizedBox(height: 8),
-            Text("5. 🔊 Mic button for voice commands"),
-            SizedBox(height: 8),
-            Text("6. Available words:"),
+            Text("2. ✍️ Type words in Roman Urdu"),
+            Text("3. 🎤 Click mic to speak"),
+            Text("4. Available words:"),
             SizedBox(height: 8),
             Wrap(
               spacing: 8,
@@ -692,7 +630,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text("Action to Speak - Deaf Communication"),
+        title: Text("Action to Speak - Sign Detection"),
         backgroundColor: Colors.blue,
         foregroundColor: Colors.white,
         bottom: PreferredSize(
@@ -709,7 +647,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
       ),
       body: Column(
         children: [
-          // Camera Preview (Option 1)
+          // Camera Preview
           Expanded(
             flex: 2,
             child: Container(
@@ -744,7 +682,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
             ),
           ),
           
-          // Detected Sign Display (Option 2)
+          // Detected Text Display
           Container(
             margin: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             padding: EdgeInsets.all(12),
@@ -759,7 +697,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
                 SizedBox(width: 10),
                 Expanded(
                   child: Text(
-                    detectedText.isEmpty ? "No sign detected yet" : "Sign: $detectedText",
+                    detectedText.isEmpty ? "No sign detected yet" : detectedText,
                     style: TextStyle(
                       fontSize: 18,
                       fontWeight: FontWeight.bold,
@@ -770,145 +708,8 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
               ],
             ),
           ),
-
-          // Option 3: Text Output Section
-          Container(
-            margin: EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-            padding: EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: Colors.green.shade50,
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: Colors.green.shade200),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Icon(Icons.text_fields, color: Colors.green),
-                    SizedBox(width: 8),
-                    Text(
-                      "📝 Text Output (Option 3)",
-                      style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        color: Colors.green.shade800,
-                      ),
-                    ),
-                  ],
-                ),
-                SizedBox(height: 8),
-                Row(
-                  children: [
-                    Expanded(
-                      child: TextField(
-                        controller: textOutputController,
-                        decoration: InputDecoration(
-                          hintText: "Detected text will appear here",
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                        ),
-                        readOnly: true,
-                      ),
-                    ),
-                    SizedBox(width: 8),
-                    IconButton(
-                      icon: Icon(Icons.volume_up, color: Colors.green),
-                      onPressed: () {
-                        if (speechOutput.isNotEmpty) {
-                          tts.speak(speechOutput);
-                        }
-                      },
-                    ),
-                    IconButton(
-                      icon: Icon(Icons.clear, color: Colors.red),
-                      onPressed: clearTextOutput,
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-
-          // Option 4: Voice Input Section
-          Container(
-            margin: EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-            padding: EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: Colors.purple.shade50,
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: Colors.purple.shade200),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Icon(Icons.mic, color: Colors.purple),
-                    SizedBox(width: 8),
-                    Text(
-                      "🎤 Voice Input (Option 4) - Speak to convert to sign",
-                      style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        color: Colors.purple.shade800,
-                      ),
-                    ),
-                  ],
-                ),
-                SizedBox(height: 8),
-                Row(
-                  children: [
-                    Expanded(
-                      child: Container(
-                        padding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                        decoration: BoxDecoration(
-                          border: Border.all(color: Colors.grey.shade300),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: Text(
-                          voiceInputText.isEmpty ? "Click mic button and speak" : voiceInputText,
-                          style: TextStyle(
-                            fontSize: 14,
-                            color: voiceInputText.isEmpty ? Colors.grey : Colors.black,
-                          ),
-                        ),
-                      ),
-                    ),
-                    SizedBox(width: 8),
-                    if (!isVoiceInputEnabled)
-                      IconButton(
-                        icon: Icon(Icons.mic, color: Colors.purple, size: 30),
-                        onPressed: startVoiceInput,
-                      ),
-                    if (isVoiceInputEnabled)
-                      Stack(
-                        children: [
-                          IconButton(
-                            icon: Icon(Icons.mic, color: Colors.red, size: 30),
-                            onPressed: stopVoiceInput,
-                          ),
-                          Positioned(
-                            right: 0,
-                            top: 0,
-                            child: Container(
-                              width: 10,
-                              height: 10,
-                              decoration: BoxDecoration(
-                                color: Colors.red,
-                                shape: BoxShape.circle,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                  ],
-                ),
-              ],
-            ),
-          ),
           
-          // Text Input Row (Roman Urdu)
+          // Text Input
           Padding(
             padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             child: Row(
@@ -923,12 +724,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
                         borderRadius: BorderRadius.circular(8),
                       ),
                       prefixIcon: Icon(Icons.keyboard),
-                      suffixIcon: textController.text.isNotEmpty
-                          ? IconButton(
-                              icon: Icon(Icons.clear),
-                              onPressed: clearText,
-                            )
-                          : null,
                     ),
                     onSubmitted: (value) {
                       textFocusNode.unfocus();
@@ -952,7 +747,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
             ),
           ),
           
-          // Quick Action Chips
+          // Quick Chips
           Container(
             height: 50,
             margin: EdgeInsets.symmetric(horizontal: 16),
@@ -980,7 +775,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceEvenly,
               children: [
-                // Camera Button
                 Column(
                   children: [
                     IconButton(
@@ -995,7 +789,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
                   ],
                 ),
                 
-                // Mic Button for Voice Search
                 Column(
                   children: [
                     Stack(
@@ -1027,7 +820,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
                   ],
                 ),
                 
-                // Help Button
                 Column(
                   children: [
                     IconButton(
@@ -1053,7 +845,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     tts.stop();
     speech.stop();
     textController.dispose();
-    textOutputController.dispose();
     textFocusNode.dispose();
     super.dispose();
   }
@@ -1082,21 +873,13 @@ class _VideoScreenState extends State<VideoScreen> {
 
   void _loadVideo() async {
     try {
-      print("Loading video from: ${widget.path}");
-      
       controller = VideoPlayerController.asset(widget.path);
-      
       await controller.initialize();
-      
-      print("Video loaded successfully!");
-      
       setState(() {
         isVideoLoading = false;
       });
-      
       controller.play();
       controller.setLooping(true);
-      
     } catch (e) {
       print("Error loading video: $e");
       setState(() {
@@ -1119,41 +902,20 @@ class _VideoScreenState extends State<VideoScreen> {
             ? Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  CircularProgressIndicator(
-                    color: Colors.blue,
-                  ),
+                  CircularProgressIndicator(color: Colors.blue),
                   SizedBox(height: 20),
-                  Text(
-                    "Loading video...",
-                    style: TextStyle(color: Colors.white),
-                  ),
+                  Text("Loading video...", style: TextStyle(color: Colors.white)),
                 ],
               )
             : hasError
                 ? Column(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      Icon(
-                        Icons.error_outline,
-                        color: Colors.red,
-                        size: 60,
-                      ),
+                      Icon(Icons.error_outline, color: Colors.red, size: 60),
                       SizedBox(height: 20),
-                      Text(
-                        "Video not found!",
-                        style: TextStyle(color: Colors.white, fontSize: 18),
-                      ),
-                      SizedBox(height: 10),
-                      Text(
-                        "Sign: ${widget.signName}",
-                        style: TextStyle(color: Colors.white70, fontSize: 14),
-                      ),
-                      SizedBox(height: 20),
+                      Text("Video not found!", style: TextStyle(color: Colors.white)),
                       ElevatedButton(
                         onPressed: () => Navigator.pop(context),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.blue,
-                        ),
                         child: Text("Go Back"),
                       ),
                     ],
@@ -1183,7 +945,6 @@ class _VideoScreenState extends State<VideoScreen> {
                               });
                             },
                           ),
-                          SizedBox(width: 20),
                           IconButton(
                             icon: Icon(Icons.replay, color: Colors.white, size: 40),
                             onPressed: () {
@@ -1191,17 +952,11 @@ class _VideoScreenState extends State<VideoScreen> {
                               controller.play();
                             },
                           ),
-                          SizedBox(width: 20),
                           IconButton(
                             icon: Icon(Icons.close, color: Colors.white, size: 40),
                             onPressed: () => Navigator.pop(context),
                           ),
                         ],
-                      ),
-                      SizedBox(height: 10),
-                      Text(
-                        "Showing: ${widget.signName}",
-                        style: TextStyle(color: Colors.white70, fontSize: 14),
                       ),
                     ],
                   ),
