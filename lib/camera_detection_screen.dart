@@ -3,7 +3,7 @@ import 'package:camera/camera.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 import 'package:tflite_flutter/tflite_flutter.dart';
-import 'package:google_mlkit_hand_landmarker/google_mlkit_hand_landmarker.dart';
+import 'package:hand_landmarker/hand_landmarker.dart';
 
 class CameraDetectionScreen extends StatefulWidget {
   @override
