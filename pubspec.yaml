@@ -22,7 +22,8 @@ dependencies:
   camera: ^0.11.3
   flutter_tts: ^3.8.5
   tflite_flutter: ^0.12.0
-  hand_landmarker: ^1.0.0
+  google_mlkit_commons: ^0.12.0
+  google_mlkit_pose_detection: ^0.12.0
 dev_dependencies:
   flutter_test:
     sdk: flutter
