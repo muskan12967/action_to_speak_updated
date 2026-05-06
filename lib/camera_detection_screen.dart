@@ -3,7 +3,9 @@ import 'package:camera/camera.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 import 'package:tflite_flutter/tflite_flutter.dart';
-import 'package:hand_landmarker/hand_landmarker.dart';
+
+import 'package:google_mlkit_pose_detection/google_mlkit_pose_detection.dart';
+import 'package:google_mlkit_commons/google_mlkit_commons.dart';
 
 class CameraDetectionScreen extends StatefulWidget {
   @override
@@ -14,7 +16,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
 
   CameraController? controller;
   late Interpreter interpreter;
-  late HandLandmarker handLandmarker;
+  late PoseDetector poseDetector;
 
   FlutterTts tts = FlutterTts();
   stt.SpeechToText speech = stt.SpeechToText();
@@ -52,8 +54,12 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   @override
   void initState() {
     super.initState();
+
+    poseDetector = PoseDetector(
+      options: PoseDetectorOptions(mode: PoseDetectionMode.stream),
+    );
+
     loadModel();
-    initHandLandmarker();
     initTTS();
   }
 
@@ -66,15 +72,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     interpreter = await Interpreter.fromAsset("model.tflite");
   }
 
-  Future initHandLandmarker() async {
-    handLandmarker = HandLandmarker(
-      options: HandLandmarkerOptions(
-        mode: HandLandmarkerMode.stream,
-        numHands: 1,
-      ),
-    );
-  }
-
+  // ================= CAMERA =================
   Future initCamera() async {
 
     final cams = await availableCameras();
@@ -113,46 +111,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     }
   }
 
-  // ================= FIXED HAND LANDMARKS =================
- Future<List<double>> extractLandmarks(InputImage image) async {
-
-  final poses = await poseDetector.processImage(image);
-
-  if (poses.isEmpty) return List.filled(63, 0.0);
-
-  final pose = poses.first;
-
-  List<double> data = [];
-
-  // IMPORTANT: FIXED MediaPipe-style order approximation
-  final points = [
-    PoseLandmarkType.leftWrist,
-    PoseLandmarkType.rightWrist,
-    PoseLandmarkType.leftElbow,
-    PoseLandmarkType.rightElbow,
-    PoseLandmarkType.leftShoulder,
-    PoseLandmarkType.rightShoulder,
-    PoseLandmarkType.nose,
-  ];
-
-  for (final p in points) {
-    final lm = pose.landmarks[p];
-
-    if (lm != null) {
-      data.addAll([lm.x, lm.y, lm.z ?? 0.0]);
-    } else {
-      data.addAll([0.0, 0.0, 0.0]);
-    }
-  }
-
-  // pad to match training size
-  while (data.length < 63) {
-    data.add(0.0);
-  }
-
-  return data;
-}
-  // ================= INPUT IMAGE =================
+  // ================= IMAGE =================
   InputImage inputImageFromCamera(
       CameraImage image,
       CameraDescription camera,
@@ -175,6 +134,48 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
         bytesPerRow: image.planes[0].bytesPerRow,
       ),
     );
+  }
+
+  // ================= LANDMARK FIX (STABLE + WORKING) =================
+  Future<List<double>> extractLandmarks(InputImage image) async {
+
+    final poses = await poseDetector.processImage(image);
+
+    if (poses.isEmpty) return List.filled(63, 0.0);
+
+    final pose = poses.first;
+
+    List<double> data = [];
+
+    final points = [
+      PoseLandmarkType.nose,
+      PoseLandmarkType.leftShoulder,
+      PoseLandmarkType.rightShoulder,
+      PoseLandmarkType.leftElbow,
+      PoseLandmarkType.rightElbow,
+      PoseLandmarkType.leftWrist,
+      PoseLandmarkType.rightWrist,
+      PoseLandmarkType.leftHip,
+      PoseLandmarkType.rightHip,
+    ];
+
+    for (final p in points) {
+      final lm = pose.landmarks[p];
+
+      if (lm != null) {
+        data.add(lm.x);
+        data.add(lm.y);
+        data.add(lm.z ?? 0.0);
+      } else {
+        data.addAll([0.0, 0.0, 0.0]);
+      }
+    }
+
+    while (data.length < 63) {
+      data.add(0.0);
+    }
+
+    return data;
   }
 
   // ================= MODEL =================
@@ -214,7 +215,8 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
       if (isProcessing) return;
       isProcessing = true;
 
-      final inputImage = inputImageFromCamera(image, controller!.description);
+      final inputImage =
+      inputImageFromCamera(image, controller!.description);
 
       final frame = await extractLandmarks(inputImage);
 
@@ -242,13 +244,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
           });
 
           tts.speak(result);
-
-          Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (_) => VideoScreen(signMap[result]!),
-            ),
-          );
         }
       }
 
@@ -261,8 +256,10 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   // ================= UI =================
   @override
   Widget build(BuildContext context) {
+
     return Scaffold(
       appBar: AppBar(title: Text("Final Sign AI")),
+
       body: Column(
         children: [
 
@@ -292,23 +289,9 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   void dispose() {
     controller?.dispose();
     interpreter.close();
-    handLandmarker.close();
+    poseDetector.close();
     tts.stop();
     speech.stop();
     super.dispose();
-  }
-}
-
-// ================= VIDEO =================
-class VideoScreen extends StatelessWidget {
-  final String path;
-  VideoScreen(this.path);
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.black,
-      body: Center(child: Text("Playing: $path")),
-    );
   }
 }
