@@ -29,10 +29,18 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^3.0.0
+  flutter_launcher_icons: ^0.14.3
+
 
 flutter:
   uses-material-design: true
-
+flutter_icons:
+  android: true
+  ios: true
+  image_path: "assets/your_logo.png"  # Change this to your logo path
+  adaptive_icon_background: "#1E3A8A"  # Deep blue matching your app theme
+  adaptive_icon_foreground: "assets/your_logo.png"  # Same logo for foreground
+  remove_alpha_ios: true
   assets:
     - assets/logo.png
     - assets/model.tflite
