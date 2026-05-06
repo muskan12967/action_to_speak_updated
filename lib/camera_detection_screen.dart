@@ -26,21 +26,21 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   bool isProcessing = false;
   bool isStreamActive = false;
   bool isModelLoaded = false;
-  bool isListening = false; // Track mic status
+  bool isListening = false;
 
   List<List<double>> sequence = [];
 
   String detectedText = "";
   String lastResult = "";
   String modelStatus = "Loading model...";
-  String micStatus = "Mic off"; // Show mic status
+  String micStatus = "Mic off";
 
   DateTime lastTrigger = DateTime.now();
 
   final int SEQ_LEN = 25;
 
   final TextEditingController textController = TextEditingController();
-  final FocusNode textFocusNode = FocusNode(); // For keyboard management
+  final FocusNode textFocusNode = FocusNode();
 
   final Map<String, String> signMap = {
     "baap": "assets/videos/father.mp4",
@@ -59,7 +59,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     "kitaab","likhna","maa","parhna","talibeilm"
   ];
 
-  // Urdu synonyms for better recognition
   final Map<String, List<String>> urduSynonyms = {
     "baap": ["baap", "father", "dad", "papa", "walid", "aba"],
     "dost": ["dost", "friend", "yaar", "companion", "saathi"],
@@ -72,18 +71,17 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     "talibeilm": ["talibeilm", "student", "talib-e-ilam", "student", "shagird"],
   };
 
-  // Multi-hand specific sets
-  final Set<String> twoHandSigns = {"kitaab", "ghar", "khandan", "parhna","likhna","dost"};
-  final Set<String> oneHandSigns = {"maa", "baap","talibeilm"};
+  final Set<String> twoHandSigns = {"likhna", "dost", "khandan", "parhna","ghar", "kitaab"};
+  final Set<String> oneHandSigns = {  "baap", "maa", "talibeilm"};
 
   @override
   void initState() {
     super.initState();
 
+    // FIXED: Removed multiPose parameter
     poseDetector = PoseDetector(
       options: PoseDetectorOptions(
         mode: PoseDetectionMode.stream,
-        multiPose: true,
       ),
     );
 
@@ -99,29 +97,16 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   }
 
   Future initSpeech() async {
-    bool available = await speech.initialize(
-      onStatus: (status) {
-        print("Speech status: $status");
-        setState(() {
-          if (status == "notListening") {
-            isListening = false;
-            micStatus = "Mic off";
-          }
-        });
-      },
-      onError: (error) {
-        print("Speech error: $error");
-        setState(() {
-          isListening = false;
-          micStatus = "Mic error";
-        });
-      },
-    );
-    
-    if (available) {
-      print("Speech recognition available");
-    } else {
-      print("Speech recognition not available");
+    try {
+      // FIXED: Simplified initialization without complex error handling
+      bool available = await speech.initialize();
+      if (available) {
+        print("Speech recognition available");
+      } else {
+        print("Speech recognition not available");
+      }
+    } catch (e) {
+      print("Speech initialization error: $e");
     }
   }
 
@@ -156,7 +141,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     }
   }
 
-  // ================= FRONT CAMERA =================
   Future initCamera() async {
     final cams = await availableCameras();
     final frontCam = cams.firstWhere(
@@ -197,7 +181,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     }
   }
 
-  // ================= INPUT IMAGE =================
   InputImage inputImageFromCamera(
     CameraImage image, CameraDescription camera) { 
     final plane = image.planes[0]; 
@@ -215,14 +198,12 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     return inputImage;
   }
 
-  // ================= MULTI-HAND LANDMARKS =================
   Future<List<double>> extractLandmarks(InputImage image) async {
     final poses = await poseDetector.processImage(image);
     if (poses.isEmpty) return List.filled(60, 0.0);
 
     final primaryPose = poses.first;
     
-    // Get shoulder center for normalization
     final leftShoulder = primaryPose.landmarks[PoseLandmarkType.leftShoulder];
     final rightShoulder = primaryPose.landmarks[PoseLandmarkType.rightShoulder];
     
@@ -292,7 +273,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     return data;
   }
 
-  // ================= MODEL PREDICTION =================
   String predict(List<List<double>> seq) {
     if (interpreter == null || !isModelLoaded) {
       return "unknown";
@@ -327,7 +307,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     }
   }
 
-  // ================= CHECK GESTURE STABILITY =================
   double checkSequenceStability(List<List<double>> seq) {
     if (seq.length < 5) return 0.0;
     
@@ -347,7 +326,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     return 1.0 - avgVariance.clamp(0.0, 0.5) / 0.5;
   }
 
-  // ================= COUNT HANDS =================
   Future<int> countHands(InputImage image) async {
     final poses = await poseDetector.processImage(image);
     int handCount = 0;
@@ -359,7 +337,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     return handCount;
   }
 
-  // ================= STREAM =================
   void startStream() {
     if (controller == null || isStreamActive || interpreter == null) return;
 
@@ -420,7 +397,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     isStreamActive = true;
   }
 
-  // ================= ENHANCED TEXT INPUT WITH SYNONYMS =================
   void handleTextInput(String text) {
     String input = text.toLowerCase().trim();
     if (input.isEmpty) {
@@ -429,11 +405,8 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     }
 
     print("Searching for: $input");
-    
-    // Clear text field after submission
     textController.clear();
     
-    // Search using synonyms
     String? matchedKey = _findMatch(input);
     
     if (matchedKey != null) {
@@ -449,21 +422,17 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     }
   }
 
-  // Helper method to find matching word using synonyms
   String? _findMatch(String input) {
-    // First check direct match
     if (signMap.containsKey(input)) {
       return input;
     }
     
-    // Check synonyms
     for (var entry in urduSynonyms.entries) {
       if (entry.value.contains(input)) {
         return entry.key;
       }
     }
     
-    // Check partial matches
     for (var key in signMap.keys) {
       if (input.contains(key) || key.contains(input)) {
         return key;
@@ -473,10 +442,8 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     return null;
   }
 
-  // ================= ENHANCED MIC INPUT =================
   void toggleMic() async {
     if (isListening) {
-      // Stop listening
       await speech.stop();
       setState(() {
         isListening = false;
@@ -484,7 +451,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
       });
       _showSnackBar("Microphone stopped");
     } else {
-      // Start listening
       bool available = await speech.initialize();
       if (available) {
         setState(() {
@@ -493,6 +459,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
           detectedText = "Listening...";
         });
         
+        // FIXED: Removed listenOptions and onError parameters
         speech.listen(
           onResult: (result) {
             String spokenText = result.recognizedWords;
@@ -502,30 +469,14 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
               detectedText = "Heard: $spokenText";
             });
             
-            // Auto stop after getting result
             speech.stop();
             setState(() {
               isListening = false;
               micStatus = "Mic off";
             });
             
-            // Process the spoken text
             handleTextInput(spokenText);
           },
-          onError: (error) {
-            print("Speech error: $error");
-            setState(() {
-              isListening = false;
-              micStatus = "Mic error";
-            });
-            _showSnackBar("Error: $error");
-          },
-          listenOptions: stt.ListenOptions(
-            listenMode: stt.ListenMode.dictation,
-            partialResults: false,
-          ),
-          localeId: "ur_PK", // Urdu
-          pauseFor: Duration(seconds: 2),
         );
         
         _showSnackBar("Listening... Speak now");
@@ -535,7 +486,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     }
   }
 
-  // ================= SHOW VIDEO =================
   void _showVideo(String key) {
     if (signMap.containsKey(key)) {
       Navigator.push(
@@ -547,7 +497,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     }
   }
 
-  // ================= SHOW SNACKBAR =================
   void _showSnackBar(String message) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -557,234 +506,12 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     );
   }
 
-  // ================= CLEAR TEXT =================
   void clearText() {
     textController.clear();
     setState(() {
       detectedText = "";
     });
     _showSnackBar("Text cleared");
-  }
-
-  // ================= UI =================
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: Text("Action to Speak - Deaf Communication"),
-        backgroundColor: Colors.blue,
-        foregroundColor: Colors.white,
-        bottom: PreferredSize(
-          preferredSize: Size.fromHeight(30),
-          child: Container(
-            padding: EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-            alignment: Alignment.centerLeft,
-            child: Text(
-              modelStatus,
-              style: TextStyle(fontSize: 12, color: Colors.white70),
-            ),
-          ),
-        ),
-      ),
-      body: Column(
-        children: [
-          // Camera Preview
-          Expanded(
-            flex: 2,
-            child: Container(
-              margin: EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                border: Border.all(color: Colors.blue, width: 2),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(10),
-                child: isCameraOn && controller != null
-                    ? CameraPreview(controller!)
-                    : Center(
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(Icons.videocam_off, size: 64, color: Colors.grey),
-                            SizedBox(height: 10),
-                            Text("Camera is OFF", style: TextStyle(fontSize: 16)),
-                            if (!isModelLoaded)
-                              Padding(
-                                padding: EdgeInsets.all(16),
-                                child: CircularProgressIndicator(),
-                              ),
-                          ],
-                        ),
-                      ),
-              ),
-            ),
-          ),
-          
-          // Detected Text Display
-          Container(
-            margin: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            padding: EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: Colors.blue.shade50,
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: Colors.blue.shade200),
-            ),
-            child: Row(
-              children: [
-                Icon(Icons.visibility, color: Colors.blue),
-                SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    detectedText.isEmpty ? "No sign detected yet" : detectedText,
-                    style: TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                      color: detectedText.isEmpty ? Colors.grey : Colors.black,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          
-          // Text Input Section
-          Padding(
-            padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            child: Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: textController,
-                    focusNode: textFocusNode,
-                    decoration: InputDecoration(
-                      hintText: "Type in Roman Urdu (e.g., baap, dost, ghar)",
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      prefixIcon: Icon(Icons.keyboard),
-                      suffixIcon: textController.text.isNotEmpty
-                          ? IconButton(
-                              icon: Icon(Icons.clear),
-                              onPressed: clearText,
-                            )
-                          : null,
-                    ),
-                    onSubmitted: (value) {
-                      textFocusNode.unfocus(); // Hide keyboard
-                      handleTextInput(value);
-                    },
-                  ),
-                ),
-                SizedBox(width: 8),
-                // Send Button
-                ElevatedButton(
-                  onPressed: () {
-                    textFocusNode.unfocus();
-                    handleTextInput(textController.text);
-                  },
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.green,
-                    padding: EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-                  ),
-                  child: Icon(Icons.send, color: Colors.white),
-                ),
-              ],
-            ),
-          ),
-          
-          // Suggested words chips
-          Container(
-            height: 50,
-            margin: EdgeInsets.symmetric(horizontal: 16),
-            child: ListView(
-              scrollDirection: Axis.horizontal,
-              children: signMap.keys.map((key) {
-                return Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 4),
-                  child: ActionChip(
-                    label: Text(key),
-                    onPressed: () {
-                      textController.text = key;
-                      handleTextInput(key);
-                    },
-                    backgroundColor: Colors.blue.shade100,
-                  ),
-                );
-              }).toList(),
-            ),
-          ),
-          
-          // Control Buttons
-          Padding(
-            padding: EdgeInsets.all(16),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-              children: [
-                // Camera Toggle Button
-                Column(
-                  children: [
-                    IconButton(
-                      icon: Icon(
-                        isCameraOn ? Icons.videocam : Icons.videocam_off,
-                        color: Colors.blue,
-                        size: 40,
-                      ),
-                      onPressed: toggleCamera,
-                    ),
-                    Text(isCameraOn ? "Camera ON" : "Camera OFF"),
-                  ],
-                ),
-                
-                // Mic Button with Status
-                Column(
-                  children: [
-                    Stack(
-                      children: [
-                        IconButton(
-                          icon: Icon(
-                            isListening ? Icons.mic : Icons.mic_none,
-                            color: isListening ? Colors.red : Colors.grey,
-                            size: 40,
-                          ),
-                          onPressed: toggleMic,
-                        ),
-                        if (isListening)
-                          Positioned(
-                            right: 0,
-                            top: 0,
-                            child: Container(
-                              width: 12,
-                              height: 12,
-                              decoration: BoxDecoration(
-                                color: Colors.red,
-                                shape: BoxShape.circle,
-                              ),
-                            ),
-                          ),
-                      ],
-                    ),
-                    Text(micStatus, style: TextStyle(fontSize: 12)),
-                  ],
-                ),
-                
-                // Info Button
-                Column(
-                  children: [
-                    IconButton(
-                      icon: Icon(Icons.info, color: Colors.orange, size: 40),
-                      onPressed: () {
-                        _showInfoDialog();
-                      },
-                    ),
-                    Text("Help"),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
   }
 
   void _showInfoDialog() {
@@ -821,6 +548,215 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   }
 
   @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text("Action to Speak - Deaf Communication"),
+        backgroundColor: Colors.blue,
+        foregroundColor: Colors.white,
+        bottom: PreferredSize(
+          preferredSize: Size.fromHeight(30),
+          child: Container(
+            padding: EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+            alignment: Alignment.centerLeft,
+            child: Text(
+              modelStatus,
+              style: TextStyle(fontSize: 12, color: Colors.white70),
+            ),
+          ),
+        ),
+      ),
+      body: Column(
+        children: [
+          Expanded(
+            flex: 2,
+            child: Container(
+              margin: EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                border: Border.all(color: Colors.blue, width: 2),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(10),
+                child: isCameraOn && controller != null
+                    ? CameraPreview(controller!)
+                    : Center(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(Icons.videocam_off, size: 64, color: Colors.grey),
+                            SizedBox(height: 10),
+                            Text("Camera is OFF", style: TextStyle(fontSize: 16)),
+                            if (!isModelLoaded)
+                              Padding(
+                                padding: EdgeInsets.all(16),
+                                child: CircularProgressIndicator(),
+                              ),
+                          ],
+                        ),
+                      ),
+              ),
+            ),
+          ),
+          
+          Container(
+            margin: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            padding: EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.blue.shade50,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: Colors.blue.shade200),
+            ),
+            child: Row(
+              children: [
+                Icon(Icons.visibility, color: Colors.blue),
+                SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    detectedText.isEmpty ? "No sign detected yet" : detectedText,
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                      color: detectedText.isEmpty ? Colors.grey : Colors.black,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          
+          Padding(
+            padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: textController,
+                    focusNode: textFocusNode,
+                    decoration: InputDecoration(
+                      hintText: "Type in Roman Urdu (e.g., baap, dost, ghar)",
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      prefixIcon: Icon(Icons.keyboard),
+                      suffixIcon: textController.text.isNotEmpty
+                          ? IconButton(
+                              icon: Icon(Icons.clear),
+                              onPressed: clearText,
+                            )
+                          : null,
+                    ),
+                    onSubmitted: (value) {
+                      textFocusNode.unfocus();
+                      handleTextInput(value);
+                    },
+                  ),
+                ),
+                SizedBox(width: 8),
+                ElevatedButton(
+                  onPressed: () {
+                    textFocusNode.unfocus();
+                    handleTextInput(textController.text);
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.green,
+                    padding: EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                  ),
+                  child: Icon(Icons.send, color: Colors.white),
+                ),
+              ],
+            ),
+          ),
+          
+          Container(
+            height: 50,
+            margin: EdgeInsets.symmetric(horizontal: 16),
+            child: ListView(
+              scrollDirection: Axis.horizontal,
+              children: signMap.keys.map((key) {
+                return Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 4),
+                  child: ActionChip(
+                    label: Text(key),
+                    onPressed: () {
+                      textController.text = key;
+                      handleTextInput(key);
+                    },
+                    backgroundColor: Colors.blue.shade100,
+                  ),
+                );
+              }).toList(),
+            ),
+          ),
+          
+          Padding(
+            padding: EdgeInsets.all(16),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              children: [
+                Column(
+                  children: [
+                    IconButton(
+                      icon: Icon(
+                        isCameraOn ? Icons.videocam : Icons.videocam_off,
+                        color: Colors.blue,
+                        size: 40,
+                      ),
+                      onPressed: toggleCamera,
+                    ),
+                    Text(isCameraOn ? "Camera ON" : "Camera OFF"),
+                  ],
+                ),
+                
+                Column(
+                  children: [
+                    Stack(
+                      children: [
+                        IconButton(
+                          icon: Icon(
+                            isListening ? Icons.mic : Icons.mic_none,
+                            color: isListening ? Colors.red : Colors.grey,
+                            size: 40,
+                          ),
+                          onPressed: toggleMic,
+                        ),
+                        if (isListening)
+                          Positioned(
+                            right: 0,
+                            top: 0,
+                            child: Container(
+                              width: 12,
+                              height: 12,
+                              decoration: BoxDecoration(
+                                color: Colors.red,
+                                shape: BoxShape.circle,
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                    Text(micStatus, style: TextStyle(fontSize: 12)),
+                  ],
+                ),
+                
+                Column(
+                  children: [
+                    IconButton(
+                      icon: Icon(Icons.info, color: Colors.orange, size: 40),
+                      onPressed: _showInfoDialog,
+                    ),
+                    Text("Help"),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
   void dispose() {
     controller?.dispose();
     poseDetector.close();
@@ -833,7 +769,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   }
 }
 
-// ================= VIDEO SCREEN =================
 class VideoScreen extends StatefulWidget {
   final String path;
   VideoScreen(this.path);
