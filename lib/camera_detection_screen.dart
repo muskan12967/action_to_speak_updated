@@ -1,12 +1,9 @@
-
 import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 import 'package:tflite_flutter/tflite_flutter.dart';
-import 'package:video_player/video_player.dart';
-import 'package:google_mlkit_pose_detection/google_mlkit_pose_detection.dart';
-import 'package:google_mlkit_commons/google_mlkit_commons.dart';
+import 'package:google_mlkit_hand_landmarker/google_mlkit_hand_landmarker.dart';
 
 class CameraDetectionScreen extends StatefulWidget {
   @override
@@ -17,7 +14,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
 
   CameraController? controller;
   late Interpreter interpreter;
-  late PoseDetector poseDetector;
+  late HandLandmarker handLandmarker;
 
   FlutterTts tts = FlutterTts();
   stt.SpeechToText speech = stt.SpeechToText();
@@ -33,9 +30,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
 
   DateTime lastTrigger = DateTime.now();
 
-  final int SEQ_LEN = 20;
-
-  final TextEditingController textController = TextEditingController();
+  final int SEQ_LEN = 25;
 
   final Map<String, String> signMap = {
     "baap": "assets/videos/father.mp4",
@@ -57,12 +52,8 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   @override
   void initState() {
     super.initState();
-
-    poseDetector = PoseDetector(
-      options: PoseDetectorOptions(mode: PoseDetectionMode.stream),
-    );
-
     loadModel();
+    initHandLandmarker();
     initTTS();
   }
 
@@ -75,7 +66,15 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     interpreter = await Interpreter.fromAsset("model.tflite");
   }
 
-  // ================= FRONT CAMERA =================
+  Future initHandLandmarker() async {
+    handLandmarker = HandLandmarker(
+      options: HandLandmarkerOptions(
+        mode: HandLandmarkerMode.stream,
+        numHands: 1,
+      ),
+    );
+  }
+
   Future initCamera() async {
 
     final cams = await availableCameras();
@@ -94,15 +93,12 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
 
     setState(() {});
 
-    if (!isStreamActive) {
-      startStream();
-    }
+    startStream();
   }
 
   Future toggleCamera() async {
 
     if (isCameraOn) {
-      await controller?.stopImageStream();
       await controller?.dispose();
       controller = null;
 
@@ -117,45 +113,52 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     }
   }
 
-  // ================= FIXED INPUT IMAGE =================
- InputImage inputImageFromCamera(
-   CameraImage image, CameraDescription camera) 
- { final plane = image.planes[0]; 
-  final inputImage = InputImage.fromBytes
-    ( bytes: plane.bytes, 
-     metadata: InputImageMetadata( 
-       size: Size(image.width.toDouble(),
-                  image.height.toDouble()), 
-       rotation: InputImageRotationValue.fromRawValue(camera.sensorOrientation)
-       ?? 
-       InputImageRotation.rotation0deg, 
-       format: InputImageFormatValue.fromRawValue(image.format.raw) ?? 
-       InputImageFormat.nv21, bytesPerRow: plane.bytesPerRow,
-     ), 
-    );
-  return inputImage;
- }
-
-  // ================= LANDMARKS =================
+  // ================= FIXED HAND LANDMARKS =================
   Future<List<double>> extractLandmarks(InputImage image) async {
 
-    final poses = await poseDetector.processImage(image);
+    final result = await handLandmarker.processImage(image);
 
-    if (poses.isEmpty) return List.filled(63, 0.0);
+    if (result.handLandmarks.isEmpty) {
+      return List.filled(63, 0.0);
+    }
 
-    final pose = poses.first;
+    final hand = result.handLandmarks.first;
 
     List<double> data = [];
 
-    for (final lm in pose.landmarks.values) {
-      data.addAll([lm.x, lm.y, lm.z ?? 0.0]);
+    // EXACT same order as your Python MediaPipe Hands
+    for (final lm in hand) {
+      data.add(lm.x);
+      data.add(lm.y);
+      data.add(lm.z ?? 0.0);
     }
 
-    while (data.length < 63) {
-      data.add(0.0);
+    return data; // 63 values
+  }
+
+  // ================= INPUT IMAGE =================
+  InputImage inputImageFromCamera(
+      CameraImage image,
+      CameraDescription camera,
+  ) {
+    final WriteBuffer buffer = WriteBuffer();
+
+    for (final plane in image.planes) {
+      buffer.putUint8List(plane.bytes);
     }
 
-    return data;
+    final bytes = buffer.done().buffer.asUint8List();
+
+    return InputImage.fromBytes(
+      bytes: bytes,
+      metadata: InputImageMetadata(
+        size: Size(image.width.toDouble(), image.height.toDouble()),
+        rotation: InputImageRotationValue.fromRawValue(camera.sensorOrientation)
+            ?? InputImageRotation.rotation0deg,
+        format: InputImageFormat.nv21,
+        bytesPerRow: image.planes[0].bytesPerRow,
+      ),
+    );
   }
 
   // ================= MODEL =================
@@ -195,8 +198,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
       if (isProcessing) return;
       isProcessing = true;
 
-      final inputImage =
-      inputImageFromCamera(image, controller!.description);
+      final inputImage = inputImageFromCamera(image, controller!.description);
 
       final frame = await extractLandmarks(inputImage);
 
@@ -240,35 +242,11 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     isStreamActive = true;
   }
 
-  // ================= TEXT INPUT =================
-  void handleInput(String text) {
-
-    String input = text.toLowerCase();
-
-    signMap.forEach((key, video) {
-      if (input.contains(key)) {
-
-        setState(() => detectedText = key);
-
-        tts.speak("یہ $key کا اشارہ ہے");
-
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (_) => VideoScreen(video),
-          ),
-        );
-      }
-    });
-  }
-
   // ================= UI =================
   @override
   Widget build(BuildContext context) {
-
     return Scaffold(
-      appBar: AppBar(title: Text("Final AI Sign System")),
-
+      appBar: AppBar(title: Text("Final Sign AI")),
       body: Column(
         children: [
 
@@ -280,42 +258,12 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
 
           Text("Detected: $detectedText"),
 
-          Padding(
-            padding: EdgeInsets.all(8),
-            child: TextField(
-              controller: textController,
-              decoration: InputDecoration(
-                hintText: "Type Roman Urdu",
-                border: OutlineInputBorder(),
-              ),
-              onSubmitted: handleInput,
-            ),
-          ),
-
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-
               IconButton(
-                icon: Icon(
-                  isCameraOn ? Icons.videocam : Icons.videocam_off,
-                  color: Colors.blue,
-                ),
+                icon: Icon(Icons.videocam),
                 onPressed: toggleCamera,
-              ),
-
-              IconButton(
-                icon: Icon(Icons.mic, color: Colors.red),
-                onPressed: () async {
-                  if (await speech.initialize()) {
-                    speech.listen(
-                      localeId: "ur_PK",
-                      onResult: (res) {
-                        handleInput(res.recognizedWords);
-                      },
-                    );
-                  }
-                },
               ),
             ],
           )
@@ -327,8 +275,8 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   @override
   void dispose() {
     controller?.dispose();
-    poseDetector.close();
     interpreter.close();
+    handLandmarker.close();
     tts.stop();
     speech.stop();
     super.dispose();
@@ -336,46 +284,15 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
 }
 
 // ================= VIDEO =================
-class VideoScreen extends StatefulWidget {
+class VideoScreen extends StatelessWidget {
   final String path;
   VideoScreen(this.path);
-
-  @override
-  State<VideoScreen> createState() => _VideoScreenState();
-}
-
-class _VideoScreenState extends State<VideoScreen> {
-  late VideoPlayerController controller;
-
-  @override
-  void initState() {
-    super.initState();
-
-    controller = VideoPlayerController.asset(widget.path)
-      ..initialize().then((_) {
-        setState(() {});
-        controller.play();
-      });
-  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.black,
-      body: Center(
-        child: controller.value.isInitialized
-            ? AspectRatio(
-                aspectRatio: controller.value.aspectRatio,
-                child: VideoPlayer(controller),
-              )
-            : CircularProgressIndicator(),
-      ),
+      body: Center(child: Text("Playing: $path")),
     );
-  }
-
-  @override
-  void dispose() {
-    controller.dispose();
-    super.dispose();
   }
 }
