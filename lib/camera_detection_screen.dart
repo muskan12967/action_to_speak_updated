@@ -117,49 +117,42 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
         modelStatus = "🔍 Checking for model file...";
       });
       
-      // Try multiple paths
-      List<String> modelPaths = [
-        'assets/model.tflite',
-        'assets/models/model.tflite',
-        'model.tflite',
-      ];
-      
-      bool modelFound = false;
-      
-      for (String path in modelPaths) {
-        try {
-          print("Trying to load from: $path");
-          final fileData = await rootBundle.load(path);
-          print("✅ File found at: $path, Size: ${fileData.lengthInBytes} bytes");
-          interpreter = await Interpreter.fromAsset(path);
-          print("✅ Model loaded successfully from: $path");
-          modelFound = true;
-          break;
-        } catch (e) {
-          print("❌ Failed to load from $path: $e");
-        }
-      }
-      
-      if (modelFound && interpreter != null) {
+      // First check if file exists in assets
+      bool fileExists = false;
+      try {
+        final fileData = await rootBundle.load('assets/model.tflite');
+        print("✅ File found! Size: ${fileData.lengthInBytes} bytes");
+        fileExists = true;
         setState(() {
-          isModelLoaded = true;
-          modelStatus = "✅ Model ready! Camera ready";
+          modelStatus = "File found (${fileData.lengthInBytes} bytes)";
         });
-        
-        // Get model details
-        var inputShape = interpreter!.getInputTensor(0).shape;
-        var outputShape = interpreter!.getOutputTensor(0).shape;
-        print("Model input shape: $inputShape");
-        print("Model output shape: $outputShape");
-        
-      } else {
+      } catch (e) {
+        print("❌ File NOT found at assets/model.tflite");
+        print("Error: $e");
         setState(() {
-          isModelLoaded = false;
-          modelStatus = "❌ Model not found in assets/ folder";
+          modelStatus = "❌ model.tflite not found in assets/";
         });
-        print("❌ Could not load model from any path");
         _showModelErrorDialog();
+        return;
       }
+      
+      if (!fileExists) return;
+      
+      // Load the model
+      interpreter = await Interpreter.fromAsset("assets/model.tflite");
+      
+      setState(() {
+        isModelLoaded = true;
+        modelStatus = "✅ Model ready! Camera ready";
+      });
+      
+      print("✅ Model loaded successfully!");
+      
+      // Get model details
+      var inputShape = interpreter!.getInputTensor(0).shape;
+      var outputShape = interpreter!.getOutputTensor(0).shape;
+      print("Model input shape: $inputShape");
+      print("Model output shape: $outputShape");
       
     } catch (e) {
       setState(() {
@@ -202,6 +195,8 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
               ),
               Text("3. Run: flutter clean && flutter pub get"),
               Text("4. Restart the app"),
+              SizedBox(height: 10),
+              Text("Current file path checked: assets/model.tflite", style: TextStyle(fontSize: 11)),
             ],
           ),
           actions: [
