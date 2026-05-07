@@ -117,7 +117,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
         modelStatus = "🔍 Checking for model file...";
       });
       
-      // First check if file exists in assets
+      // First check if file exists
       bool fileExists = false;
       try {
         final fileData = await rootBundle.load('assets/model.tflite');
@@ -128,7 +128,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
         });
       } catch (e) {
         print("❌ File NOT found at assets/model.tflite");
-        print("Error: $e");
         setState(() {
           modelStatus = "❌ model.tflite not found in assets/";
         });
@@ -154,6 +153,9 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
       print("Model input shape: $inputShape");
       print("Model output shape: $outputShape");
       
+      // Test model with dummy data
+      _testModelWithDummyData();
+      
     } catch (e) {
       setState(() {
         isModelLoaded = false;
@@ -161,6 +163,73 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
       });
       print("❌ Error loading model: $e");
       _showModelErrorDialog();
+    }
+  }
+
+  void _testModelWithDummyData() {
+    print("="*50);
+    print("TESTING MODEL WITH DUMMY DATA");
+    print("="*50);
+    
+    if (interpreter == null) {
+      print("❌ Model not loaded!");
+      return;
+    }
+    
+    // Get input shape
+    var inputShape = interpreter!.getInputTensor(0).shape;
+    print("Model expects input shape: $inputShape");
+    
+    try {
+      dynamic input;
+      var output = List.generate(1, (_) => List.filled(labels.length, 0.0));
+      
+      // Check what shape the model expects
+      if (inputShape.length == 2 && inputShape[1] == 1500) {
+        // Flattened input (1, 1500)
+        List<double> flattened = List.generate(1500, (i) => Random().nextDouble());
+        input = [flattened];
+        print("Using flattened input shape (1, 1500)");
+      } 
+      else if (inputShape.length == 3 && inputShape[1] == 25) {
+        // Sequence input (1, 25, 60)
+        List<List<double>> dummySeq = List.generate(
+          25,
+          (i) => List.generate(60, (j) => Random().nextDouble() * 0.5)
+        );
+        input = [dummySeq];
+        print("Using sequence input shape (1, 25, 60)");
+      }
+      else if (inputShape.length == 3 && inputShape[1] == 60) {
+        // Transposed input (1, 60, 25)
+        List<List<double>> dummySeq = List.generate(
+          60,
+          (i) => List.generate(25, (j) => Random().nextDouble() * 0.5)
+        );
+        input = [dummySeq];
+        print("Using transposed input shape (1, 60, 25)");
+      }
+      else {
+        print("⚠️ Unknown input shape: $inputShape");
+        return;
+      }
+      
+      interpreter!.run(input, output);
+      print("✅ Model inference successful!");
+      print("Output shape: ${output[0].length}");
+      
+      int idx = 0;
+      double maxVal = output[0][0];
+      for (int i = 0; i < labels.length; i++) {
+        if (output[0][i] > maxVal) {
+          maxVal = output[0][i];
+          idx = i;
+        }
+      }
+      print("🎯 Test prediction: ${labels[idx]} (confidence: ${maxVal.toStringAsFixed(4)})");
+      
+    } catch (e) {
+      print("❌ Model test failed: $e");
     }
   }
 
@@ -195,8 +264,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
               ),
               Text("3. Run: flutter clean && flutter pub get"),
               Text("4. Restart the app"),
-              SizedBox(height: 10),
-              Text("Current file path checked: assets/model.tflite", style: TextStyle(fontSize: 11)),
             ],
           ),
           actions: [
@@ -252,7 +319,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
       });
     } else {
       if (!isModelLoaded) {
-        _showSnackBar("Model not loaded yet. Please fix model file.");
+        _showSnackBar("Model not loaded yet. Please wait.");
         return;
       }
       setState(() => isCameraOn = true);
@@ -358,11 +425,46 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     }
     
     try {
-      List<List<List<double>>> input = [seq];
+      // Get model input shape
+      var inputShape = interpreter!.getInputTensor(0).shape;
+      
+      // Prepare input based on model's expected shape
+      dynamic input;
+      
+      // Case 1: Flattened input (1, 1500)
+      if (inputShape.length == 2 && inputShape[1] == 1500) {
+        List<double> flattened = [];
+        for (var frame in seq) {
+          flattened.addAll(frame);
+        }
+        input = [flattened];
+        print("📊 Using flattened input");
+      }
+      // Case 2: Sequence input (1, 25, 60)
+      else if (inputShape.length == 3 && inputShape[1] == 25) {
+        input = [seq];
+        print("📊 Using sequence input (25, 60)");
+      }
+      // Case 3: Transposed input (1, 60, 25)
+      else if (inputShape.length == 3 && inputShape[2] == 25) {
+        List<List<double>> transposed = List.generate(60, (i) => 
+          List.generate(25, (j) => seq[j][i])
+        );
+        input = [transposed];
+        print("📊 Using transposed input (60, 25)");
+      }
+      else {
+        print("⚠️ Unknown input shape: $inputShape, trying default");
+        input = [seq];
+      }
+      
+      // Create output array
       var output = List.generate(1, (_) => List.filled(labels.length, 0.0));
       
+      // Run inference
       interpreter!.run(input, output);
       
+      // Find highest probability
       int idx = 0;
       double maxVal = output[0][0];
       
@@ -373,13 +475,16 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
         }
       }
       
-      if (maxVal > 0.5) {
+      print("🎯 Prediction: ${labels[idx]} (${maxVal.toStringAsFixed(3)})");
+      
+      // Lower threshold for better detection
+      if (maxVal > 0.3) {
         return labels[idx];
       }
       return "unknown";
       
     } catch (e) {
-      print("Prediction error: $e");
+      print("❌ Prediction error: $e");
       return "unknown";
     }
   }
