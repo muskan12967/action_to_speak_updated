@@ -5,6 +5,7 @@ import 'package:speech_to_text/speech_to_text.dart' as stt;
 import 'package:tflite_flutter/tflite_flutter.dart';
 import 'package:video_player/video_player.dart';
 import 'package:hand_landmarker/hand_landmarker.dart';
+import 'package:google_mlkit_commons/google_mlkit_commons.dart';
 import 'dart:math';
 import 'dart:io';
 import 'package:flutter/services.dart' show rootBundle;
@@ -39,7 +40,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   DateTime lastTrigger = DateTime.now();
 
   final int SEQ_LEN = 25;
-  final int FEATURES_PER_FRAME = 126; // 2 hands × 21 landmarks × 3
+  final int FEATURES_PER_FRAME = 126;
 
   final TextEditingController textController = TextEditingController();
   final FocusNode textFocusNode = FocusNode();
@@ -84,7 +85,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
 
   Future<void> _initHandLandmarker() async {
     try {
-      // For version 2.2.0 - different API
       handLandmarker = HandLandmarker();
       await handLandmarker?.initialize();
       print("✅ HandLandmarker initialized");
@@ -126,11 +126,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
       });
       
       print("✅ Model loaded successfully!");
-      
-      var inputShape = interpreter!.getInputTensor(0).shape;
-      var outputShape = interpreter!.getOutputTensor(0).shape;
-      print("Model input shape: $inputShape");
-      print("Model output shape: $outputShape");
       
     } catch (e) {
       setState(() {
@@ -223,24 +218,27 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     }
   }
   
-  // Extract hand landmarks from CameraImage
-  Future<List<double>> extractHandLandmarks(CameraImage image) async {
+  // Convert CameraImage to InputImage for hand landmarker
+  InputImage _convertCameraImageToInputImage(CameraImage image, CameraDescription camera) {
+    final plane = image.planes[0];
+    
+    return InputImage.fromBytes(
+      bytes: plane.bytes,
+      metadata: InputImageMetadata(
+        size: Size(image.width.toDouble(), image.height.toDouble()),
+        rotation: InputImageRotationValue.fromRawValue(camera.sensorOrientation) ?? InputImageRotation.rotation0deg,
+        format: InputImageFormatValue.fromRawValue(image.format.raw) ?? InputImageFormat.nv21,
+        bytesPerRow: plane.bytesPerRow,
+      ),
+    );
+  }
+
+  // Extract hand landmarks
+  Future<List<double>> extractHandLandmarks(CameraImage image, CameraDescription camera) async {
+    if (handLandmarker == null) return List.filled(FEATURES_PER_FRAME, 0.0);
+    
     try {
-      if (handLandmarker == null) return List.filled(FEATURES_PER_FRAME, 0.0);
-      
-      // Convert CameraImage to InputImage
-      final Plane plane = image.planes[0];
-      final InputImage inputImage = InputImage.fromBytes(
-        bytes: plane.bytes,
-        metadata: InputImageMetadata(
-          size: Size(image.width.toDouble(), image.height.toDouble()),
-          rotation: InputImageRotation.rotation0deg,
-          format: InputImageFormat.nv21,
-          bytesPerRow: plane.bytesPerRow,
-        ),
-      );
-      
-      // Detect hands - for version 2.2.0
+      final inputImage = _convertCameraImageToInputImage(image, camera);
       final List<Hand>? hands = await handLandmarker?.detect(inputImage);
       
       List<double> landmarks = [];
@@ -334,7 +332,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
       isProcessing = true;
 
       try {
-        final frame = await extractHandLandmarks(image);
+        final frame = await extractHandLandmarks(image, controller!.description);
         sequence.add(frame);
 
         if (sequence.length > SEQ_LEN) {
