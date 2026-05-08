@@ -36,6 +36,7 @@ flutter:
 
   assets:
     - assets/logo.png
+    - assets/hand_landmarker.task
     - assets/model.tflite
     - assets/videos/book.mp4
     - assets/videos/friend.mp4
