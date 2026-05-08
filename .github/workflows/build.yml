@@ -14,27 +14,35 @@ jobs:
           distribution: 'zulu'
           java-version: '17'
 
-      - uses: subosito/flutter-action@v2
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.41.9'
           channel: 'stable'
 
+      - name: Enable Flutter Desktop
+        run: flutter config --enable-android
+
       - name: Create Android project files
         run: flutter create --project-name action_to_speak_updated --platforms android .
 
-      - run: flutter pub get
+      - name: Get packages
+        run: flutter pub get
 
-      - name: Fix minSdkVersion for camera/speech_to_text
-        run: |
-          sed -i 's/minSdkVersion flutter.minSdkVersion/minSdkVersion 21/g' android/app/build.gradle
+      - name: Fix minSdkVersion
+        run: sed -i 's/minSdkVersion flutter.minSdkVersion/minSdkVersion 21/g' android/app/build.gradle
+
+      - name: Fix targetSdkVersion
+        run: sed -i 's/targetSdkVersion flutter.targetSdkVersion/targetSdkVersion 34/g' android/app/build.gradle
 
       - name: Fix NDK Version
-        run: |
-          sed -i 's/ndkVersion flutter.ndkVersion/ndkVersion "25.1.8937393"/g' android/app/build.gradle
+        run: sed -i 's/ndkVersion flutter.ndkVersion/ndkVersion "25.1.8937393"/g' android/app/build.gradle
 
-      - run: flutter build apk --debug --no-shrink
+      - name: Build APK
+        run: flutter build apk --release
 
-      - uses: actions/upload-artifact@v4
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
         with:
-          name: app-debug-apk
-          path: build/app/outputs/flutter-apk/app-debug.apk
+          name: app-release-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
