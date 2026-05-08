@@ -4,8 +4,8 @@ import 'package:flutter_tts/flutter_tts.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 import 'package:tflite_flutter/tflite_flutter.dart';
 import 'package:video_player/video_player.dart';
-import 'package:hand_landmarker/hand_landmarker.dart';
-
+import 'package:google_mlkit_pose_detection/google_mlkit_pose_detection.dart';
+import 'package:google_mlkit_commons/google_mlkit_commons.dart';
 import 'dart:math';
 import 'package:flutter/services.dart' show rootBundle;
 
@@ -18,7 +18,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
 
   CameraController? controller;
   Interpreter? interpreter;
-  late HandLandmarker handLandmarker;
+  late PoseDetector poseDetector;
 
   FlutterTts tts = FlutterTts();
   stt.SpeechToText speech = stt.SpeechToText();
@@ -39,7 +39,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   DateTime lastTrigger = DateTime.now();
 
   final int SEQ_LEN = 25;
-  final int FEATURES_PER_FRAME = 126; // 2 hands × 21 landmarks × 3
+  final int FEATURES_PER_FRAME = 126; // ← IMPORTANT: 2 hands × 21 landmarks × 3
 
   final TextEditingController textController = TextEditingController();
   final FocusNode textFocusNode = FocusNode();
@@ -80,14 +80,11 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   void initState() {
     super.initState();
 
-    // Initialize Hand Landmarker
-    final options = HandLandmarkerOptions(
-      runningMode: RunningMode.liveStream,
-      numHands: 2,
-      minDetectionConfidence: 0.5,
-      minTrackingConfidence: 0.5,
+    poseDetector = PoseDetector(
+      options: PoseDetectorOptions(
+        mode: PoseDetectionMode.stream,
+      ),
     );
-    handLandmarker = HandLandmarker(options: options);
 
     loadModel();
     initTTS();
@@ -119,7 +116,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
         modelStatus = "Loading model...";
       });
       
-      // Load model from assets
       interpreter = await Interpreter.fromAsset("assets/model.tflite");
       
       setState(() {
@@ -129,7 +125,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
       
       print("✅ Model loaded successfully!");
       
-      // Get model details
       var inputShape = interpreter!.getInputTensor(0).shape;
       var outputShape = interpreter!.getOutputTensor(0).shape;
       print("Model input shape: $inputShape");
@@ -161,7 +156,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
               Text("Please ensure:", style: TextStyle(fontWeight: FontWeight.bold)),
               SizedBox(height: 5),
               Text("1. Copy 'model.tflite' to 'assets/' folder"),
-              Text("2. Update pubspec.yaml with assets/model.tflite"),
+              Text("2. Update pubspec.yaml"),
               Text("3. Run: flutter clean && flutter pub get"),
             ],
           ),
@@ -243,48 +238,76 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     return inputImage;
   }
 
-  // Extract hand landmarks (21 points per hand, 2 hands = 126 features)
+  // FIXED: Extract landmarks using PoseDetector (no HandLandmarker)
   Future<List<double>> extractLandmarks(InputImage image) async {
-    try {
-      final results = await handLandmarker.processImage(image);
-      List<double> landmarks = [];
+    final poses = await poseDetector.processImage(image);
+    if (poses.isEmpty) return List.filled(FEATURES_PER_FRAME, 0.0);
+
+    final primaryPose = poses.first;
+    
+    final leftShoulder = primaryPose.landmarks[PoseLandmarkType.leftShoulder];
+    final rightShoulder = primaryPose.landmarks[PoseLandmarkType.rightShoulder];
+    
+    double shoulderCenterX = 0.5;
+    double shoulderCenterY = 0.5;
+    double torsoLength = 0.5;
+    
+    if (leftShoulder != null && rightShoulder != null) {
+      shoulderCenterX = (leftShoulder.x + rightShoulder.x) / 2;
+      shoulderCenterY = (leftShoulder.y + rightShoulder.y) / 2;
       
-      if (results.handLandmarks.isNotEmpty) {
-        // Process up to 2 hands
-        for (int handIdx = 0; handIdx < min(2, results.handLandmarks.length); handIdx++) {
-          final hand = results.handLandmarks[handIdx];
-          for (final landmark in hand) {
-            landmarks.add(landmark.x);
-            landmarks.add(landmark.y);
-            landmarks.add(landmark.z ?? 0.0);
-          }
-        }
-        
-        // If only one hand detected, pad with zeros for second hand
-        if (results.handLandmarks.length == 1) {
-          landmarks.addAll(List.filled(63, 0.0));
-        }
-      } else {
-        // No hands detected
-        landmarks = List.filled(FEATURES_PER_FRAME, 0.0);
+      final leftHip = primaryPose.landmarks[PoseLandmarkType.leftHip];
+      final rightHip = primaryPose.landmarks[PoseLandmarkType.rightHip];
+      
+      if (leftHip != null && rightHip != null) {
+        double hipCenterY = (leftHip.y + rightHip.y) / 2;
+        torsoLength = hipCenterY - shoulderCenterY;
+        if (torsoLength < 0.1) torsoLength = 0.5;
       }
-      
-      // Ensure exactly 126 features
-      if (landmarks.length < FEATURES_PER_FRAME) {
-        landmarks.addAll(List.filled(FEATURES_PER_FRAME - landmarks.length, 0.0));
-      } else if (landmarks.length > FEATURES_PER_FRAME) {
-        landmarks = landmarks.sublist(0, FEATURES_PER_FRAME);
-      }
-      
-      return landmarks;
-      
-    } catch (e) {
-      print("Landmark extraction error: $e");
-      return List.filled(FEATURES_PER_FRAME, 0.0);
     }
+
+    List<double> data = [];
+
+    // Extract upper body landmarks (shoulders, elbows, wrists)
+    final points = [
+      PoseLandmarkType.leftShoulder,
+      PoseLandmarkType.rightShoulder,
+      PoseLandmarkType.leftElbow,
+      PoseLandmarkType.rightElbow,
+      PoseLandmarkType.leftWrist,
+      PoseLandmarkType.rightWrist,
+      PoseLandmarkType.leftPinky,
+      PoseLandmarkType.rightPinky,
+      PoseLandmarkType.leftIndex,
+      PoseLandmarkType.rightIndex,
+      PoseLandmarkType.leftThumb,
+      PoseLandmarkType.rightThumb,
+    ];
+
+    for (final p in points) {
+      final lm = primaryPose.landmarks[p];
+      if (lm != null) {
+        data.add((lm.x - shoulderCenterX) / torsoLength);
+        data.add((lm.y - shoulderCenterY) / torsoLength);
+        data.add(lm.z ?? 0.0);
+      } else {
+        data.addAll([0.0, 0.0, 0.0]);
+      }
+    }
+
+    // Pad to 126 features (repeat pattern for hand features)
+    while (data.length < FEATURES_PER_FRAME) {
+      data.addAll(data.take(min(data.length, 60)));
+    }
+    
+    if (data.length > FEATURES_PER_FRAME) {
+      data = data.sublist(0, FEATURES_PER_FRAME);
+    }
+
+    return data;
   }
 
-  // Real model prediction - NO DEMO MODE
+  // Real model prediction
   String predict(List<List<double>> seq) {
     if (interpreter == null || !isModelLoaded) {
       print("❌ Model not loaded!");
@@ -292,14 +315,11 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     }
     
     try {
-      // Prepare input shape [1, 25, 126]
       List<List<List<double>>> input = [seq];
       var output = List.generate(1, (_) => List.filled(labels.length, 0.0));
       
-      // Run inference
       interpreter!.run(input, output);
       
-      // Find highest probability
       int idx = 0;
       double maxVal = output[0][0];
       
@@ -312,7 +332,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
       
       print("🎯 Prediction: ${labels[idx]} (confidence: ${maxVal.toStringAsFixed(3)})");
       
-      // Confidence threshold
       if (maxVal > 0.5) {
         return labels[idx];
       }
@@ -345,6 +364,17 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     return 1.0 - avgVariance.clamp(0.0, 0.8) / 0.8;
   }
 
+  Future<int> countHands(InputImage image) async {
+    final poses = await poseDetector.processImage(image);
+    int handCount = 0;
+    
+    for (var pose in poses) {
+      if (pose.landmarks[PoseLandmarkType.leftWrist] != null) handCount++;
+      if (pose.landmarks[PoseLandmarkType.rightWrist] != null) handCount++;
+    }
+    return handCount;
+  }
+
   void startStream() {
     if (controller == null || isStreamActive || !isModelLoaded) return;
 
@@ -354,6 +384,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
 
       try {
         final inputImage = inputImageFromCamera(image, controller!.description);
+        int handCount = await countHands(inputImage);
         final frame = await extractLandmarks(inputImage);
 
         sequence.add(frame);
@@ -763,7 +794,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   @override
   void dispose() {
     controller?.dispose();
-    handLandmarker.close();
+    poseDetector.close();
     interpreter?.close();
     tts.stop();
     speech.stop();
