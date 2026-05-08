@@ -4,11 +4,9 @@ import 'package:flutter_tts/flutter_tts.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 import 'package:tflite_flutter/tflite_flutter.dart';
 import 'package:video_player/video_player.dart';
-import 'package:google_mlkit_pose_detection/google_mlkit_pose_detection.dart';
-import 'package:google_mlkit_commons/google_mlkit_commons.dart';
+import 'package:google_mlkit_hand_landmarker/google_mlkit_hand_landmarker.dart';
 import 'dart:math';
 import 'package:flutter/services.dart' show rootBundle;
-import 'dart:io';
 
 class CameraDetectionScreen extends StatefulWidget {
   @override
@@ -19,7 +17,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
 
   CameraController? controller;
   Interpreter? interpreter;
-  late PoseDetector poseDetector;
+  late HandLandmarker handLandmarker;
 
   FlutterTts tts = FlutterTts();
   stt.SpeechToText speech = stt.SpeechToText();
@@ -40,7 +38,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   DateTime lastTrigger = DateTime.now();
 
   final int SEQ_LEN = 25;
-  final int FEATURES_PER_FRAME = 60;
+  final int FEATURES_PER_FRAME = 126; // 2 hands × 21 landmarks × 3
 
   final TextEditingController textController = TextEditingController();
   final FocusNode textFocusNode = FocusNode();
@@ -77,18 +75,18 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   final Set<String> twoHandSigns = {"likhna", "dost", "khandan", "parhna", "ghar", "kitaab"};
   final Set<String> oneHandSigns = {"baap", "maa", "talibeilm"};
 
-  // Demo mode flag
-  bool useDemoMode = true;  // Temporary: Set to false once model works
-
   @override
   void initState() {
     super.initState();
 
-    poseDetector = PoseDetector(
-      options: PoseDetectorOptions(
-        mode: PoseDetectionMode.stream,
-      ),
+    // Initialize Hand Landmarker
+    final options = HandLandmarkerOptions(
+      runningMode: RunningMode.liveStream,
+      numHands: 2,
+      minDetectionConfidence: 0.5,
+      minTrackingConfidence: 0.5,
     );
+    handLandmarker = HandLandmarker(options: options);
 
     loadModel();
     initTTS();
@@ -99,8 +97,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     await tts.setLanguage("ur-PK");
     await tts.setSpeechRate(0.5);
     await tts.setPitch(1.0);
-    // Test TTS
-    await tts.speak("App is ready");
   }
 
   Future initSpeech() async {
@@ -119,35 +115,15 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   Future loadModel() async {
     try {
       setState(() {
-        modelStatus = "🔍 Checking for model file...";
+        modelStatus = "Loading model...";
       });
       
-      // First check if file exists
-      bool fileExists = false;
-      try {
-        final fileData = await rootBundle.load('assets/model.tflite');
-        print("✅ File found! Size: ${fileData.lengthInBytes} bytes");
-        fileExists = true;
-        setState(() {
-          modelStatus = "File found (${fileData.lengthInBytes} bytes)";
-        });
-      } catch (e) {
-        print("❌ File NOT found at assets/model.tflite");
-        setState(() {
-          modelStatus = "❌ model.tflite not found in assets/";
-        });
-        _showModelErrorDialog();
-        return;
-      }
-      
-      if (!fileExists) return;
-      
-      // Load the model
+      // Load model from assets
       interpreter = await Interpreter.fromAsset("assets/model.tflite");
       
       setState(() {
         isModelLoaded = true;
-        modelStatus = "✅ Model ready! Camera ready";
+        modelStatus = "✅ Model ready!";
       });
       
       print("✅ Model loaded successfully!");
@@ -160,10 +136,11 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
       
     } catch (e) {
       setState(() {
-        isModelLoaded = true;  // Still allow demo mode
-        modelStatus = "⚠️ Using demo mode";
+        isModelLoaded = false;
+        modelStatus = "❌ Error: ${e.toString().substring(0, 35)}";
       });
-      print("⚠️ Using demo mode: $e");
+      print("❌ Error loading model: $e");
+      _showModelErrorDialog();
     }
   }
 
@@ -173,16 +150,18 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
         context: context,
         barrierDismissible: false,
         builder: (context) => AlertDialog(
-          title: Text("Model Issue"),
+          title: Text("Model File Missing"),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text("Running in DEMO MODE for testing!", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.orange)),
+              Text("model.tflite file not found!", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.red)),
               SizedBox(height: 10),
-              Text("App will use hand movement detection instead of AI model."),
-              SizedBox(height: 10),
-              Text("To use real model, ensure model.tflite is in assets/ folder"),
+              Text("Please ensure:", style: TextStyle(fontWeight: FontWeight.bold)),
+              SizedBox(height: 5),
+              Text("1. Copy 'model.tflite' to 'assets/' folder"),
+              Text("2. Update pubspec.yaml with assets/model.tflite"),
+              Text("3. Run: flutter clean && flutter pub get"),
             ],
           ),
           actions: [
@@ -197,6 +176,11 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   }
 
   Future initCamera() async {
+    if (!isModelLoaded) {
+      _showSnackBar("Model not loaded. Please fix model file.");
+      return;
+    }
+    
     try {
       final cams = await availableCameras();
       final frontCam = cams.firstWhere(
@@ -212,7 +196,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
       await controller!.initialize();
       setState(() {});
 
-      if (!isStreamActive) {
+      if (!isStreamActive && isModelLoaded) {
         startStream();
       }
     } catch (e) {
@@ -232,6 +216,10 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
         isStreamActive = false;
       });
     } else {
+      if (!isModelLoaded) {
+        _showSnackBar("Model not loaded yet. Please wait.");
+        return;
+      }
       setState(() => isCameraOn = true);
       await initCamera();
     }
@@ -254,130 +242,85 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     return inputImage;
   }
 
+  // Extract hand landmarks (21 points per hand, 2 hands = 126 features)
   Future<List<double>> extractLandmarks(InputImage image) async {
-    final poses = await poseDetector.processImage(image);
-    if (poses.isEmpty) return List.filled(FEATURES_PER_FRAME, 0.0);
-
-    final primaryPose = poses.first;
-    
-    final leftShoulder = primaryPose.landmarks[PoseLandmarkType.leftShoulder];
-    final rightShoulder = primaryPose.landmarks[PoseLandmarkType.rightShoulder];
-    
-    double shoulderCenterX = 0.5;
-    double shoulderCenterY = 0.5;
-    double torsoLength = 0.5;
-    
-    if (leftShoulder != null && rightShoulder != null) {
-      shoulderCenterX = (leftShoulder.x + rightShoulder.x) / 2;
-      shoulderCenterY = (leftShoulder.y + rightShoulder.y) / 2;
+    try {
+      final results = await handLandmarker.processImage(image);
+      List<double> landmarks = [];
       
-      final leftHip = primaryPose.landmarks[PoseLandmarkType.leftHip];
-      final rightHip = primaryPose.landmarks[PoseLandmarkType.rightHip];
-      
-      if (leftHip != null && rightHip != null) {
-        double hipCenterY = (leftHip.y + rightHip.y) / 2;
-        torsoLength = hipCenterY - shoulderCenterY;
-        if (torsoLength < 0.1) torsoLength = 0.5;
-      }
-    }
-
-    List<double> data = [];
-
-    final points = [
-      PoseLandmarkType.nose,
-      PoseLandmarkType.leftEye,
-      PoseLandmarkType.rightEye,
-      PoseLandmarkType.leftShoulder,
-      PoseLandmarkType.rightShoulder,
-      PoseLandmarkType.leftElbow,
-      PoseLandmarkType.rightElbow,
-      PoseLandmarkType.leftWrist,
-      PoseLandmarkType.rightWrist,
-      PoseLandmarkType.leftHip,
-      PoseLandmarkType.rightHip,
-      PoseLandmarkType.leftKnee,
-      PoseLandmarkType.rightKnee,
-      PoseLandmarkType.leftAnkle,
-      PoseLandmarkType.rightAnkle,
-      PoseLandmarkType.leftPinky,
-      PoseLandmarkType.rightPinky,
-      PoseLandmarkType.leftIndex,
-      PoseLandmarkType.rightIndex,
-      PoseLandmarkType.leftThumb,
-    ];
-
-    for (final p in points) {
-      final lm = primaryPose.landmarks[p];
-
-      if (lm != null) {
-        double normalizedX = (lm.x - shoulderCenterX) / torsoLength;
-        double normalizedY = (lm.y - shoulderCenterY) / torsoLength;
-        double normalizedZ = (lm.z ?? 0.0) / torsoLength;
-        
-        data.addAll([normalizedX, normalizedY, normalizedZ]);
-      } else {
-        data.addAll([0.0, 0.0, 0.0]);
-      }
-    }
-
-    if (data.length > FEATURES_PER_FRAME) {
-      data = data.sublist(0, FEATURES_PER_FRAME);
-    } else if (data.length < FEATURES_PER_FRAME) {
-      data.addAll(List.filled(FEATURES_PER_FRAME - data.length, 0.0));
-    }
-
-    return data;
-  }
-
-  // PREDICTION WITH DEMO MODE - This will detect hand movement!
-  String predict(List<List<double>> seq) {
-    // DEMO DETECTION - Based on hand movement (works without model)
-    if (seq.length < 10) return "unknown";
-    
-    // Calculate hand movement
-    double movement = 0;
-    int startFrame = max(0, seq.length - 15);
-    
-    for (int i = startFrame; i < seq.length - 1; i++) {
-      for (int j = 0; j < 30; j++) {  // Check wrist/hand positions
-        movement += (seq[i+1][j] - seq[i][j]).abs();
-      }
-    }
-    
-    // If movement detected, return a sign
-    if (movement > 2.0) {
-      // Rotate through signs for demonstration
-      List<String> demoSigns = ["maa", "baap", "ghar", "dost", "kitaab"];
-      int index = DateTime.now().millisecondsSinceEpoch ~/ 2000 % demoSigns.length;
-      print("🎯 Demo detection: ${demoSigns[index]} (movement: ${movement.toStringAsFixed(2)})");
-      return demoSigns[index];
-    }
-    
-    // REAL MODEL PREDICTION (if model is loaded)
-    if (interpreter != null && isModelLoaded && !useDemoMode) {
-      try {
-        List<List<List<double>>> input = [seq];
-        var output = List.generate(1, (_) => List.filled(labels.length, 0.0));
-        interpreter!.run(input, output);
-        
-        int idx = 0;
-        double maxVal = output[0][0];
-        for (int i = 0; i < labels.length; i++) {
-          if (output[0][i] > maxVal) {
-            maxVal = output[0][i];
-            idx = i;
+      if (results.handLandmarks.isNotEmpty) {
+        // Process up to 2 hands
+        for (int handIdx = 0; handIdx < min(2, results.handLandmarks.length); handIdx++) {
+          final hand = results.handLandmarks[handIdx];
+          for (final landmark in hand) {
+            landmarks.add(landmark.x);
+            landmarks.add(landmark.y);
+            landmarks.add(landmark.z ?? 0.0);
           }
         }
         
-        if (maxVal > 0.4) {
-          return labels[idx];
+        // If only one hand detected, pad with zeros for second hand
+        if (results.handLandmarks.length == 1) {
+          landmarks.addAll(List.filled(63, 0.0));
         }
-      } catch (e) {
-        print("Model error: $e");
+      } else {
+        // No hands detected
+        landmarks = List.filled(FEATURES_PER_FRAME, 0.0);
       }
+      
+      // Ensure exactly 126 features
+      if (landmarks.length < FEATURES_PER_FRAME) {
+        landmarks.addAll(List.filled(FEATURES_PER_FRAME - landmarks.length, 0.0));
+      } else if (landmarks.length > FEATURES_PER_FRAME) {
+        landmarks = landmarks.sublist(0, FEATURES_PER_FRAME);
+      }
+      
+      return landmarks;
+      
+    } catch (e) {
+      print("Landmark extraction error: $e");
+      return List.filled(FEATURES_PER_FRAME, 0.0);
+    }
+  }
+
+  // Real model prediction - NO DEMO MODE
+  String predict(List<List<double>> seq) {
+    if (interpreter == null || !isModelLoaded) {
+      print("❌ Model not loaded!");
+      return "unknown";
     }
     
-    return "unknown";
+    try {
+      // Prepare input shape [1, 25, 126]
+      List<List<List<double>>> input = [seq];
+      var output = List.generate(1, (_) => List.filled(labels.length, 0.0));
+      
+      // Run inference
+      interpreter!.run(input, output);
+      
+      // Find highest probability
+      int idx = 0;
+      double maxVal = output[0][0];
+      
+      for (int i = 0; i < labels.length; i++) {
+        if (output[0][i] > maxVal) {
+          maxVal = output[0][i];
+          idx = i;
+        }
+      }
+      
+      print("🎯 Prediction: ${labels[idx]} (confidence: ${maxVal.toStringAsFixed(3)})");
+      
+      // Confidence threshold
+      if (maxVal > 0.5) {
+        return labels[idx];
+      }
+      return "unknown";
+      
+    } catch (e) {
+      print("❌ Prediction error: $e");
+      return "unknown";
+    }
   }
 
   double checkSequenceStability(List<List<double>> seq) {
@@ -401,19 +344,8 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     return 1.0 - avgVariance.clamp(0.0, 0.8) / 0.8;
   }
 
-  Future<int> countHands(InputImage image) async {
-    final poses = await poseDetector.processImage(image);
-    int handCount = 0;
-    
-    for (var pose in poses) {
-      if (pose.landmarks[PoseLandmarkType.leftWrist] != null) handCount++;
-      if (pose.landmarks[PoseLandmarkType.rightWrist] != null) handCount++;
-    }
-    return handCount;
-  }
-
   void startStream() {
-    if (controller == null || isStreamActive) return;
+    if (controller == null || isStreamActive || !isModelLoaded) return;
 
     controller!.startImageStream((image) async {
       if (isProcessing) return;
@@ -421,7 +353,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
 
       try {
         final inputImage = inputImageFromCamera(image, controller!.description);
-        int handCount = await countHands(inputImage);
         final frame = await extractLandmarks(inputImage);
 
         sequence.add(frame);
@@ -430,18 +361,16 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
           sequence.removeAt(0);
         }
 
-        if (sequence.length == SEQ_LEN) {
+        if (sequence.length == SEQ_LEN && isModelLoaded) {
           String result = predict(sequence);
           final now = DateTime.now();
 
           if (result != "unknown") {
-            print("🔔 Result: $result");
-            
-            // Lower stability requirement for demo
             double stability = checkSequenceStability(sequence);
             
             if (result != lastResult &&
-                now.difference(lastTrigger).inMilliseconds > 2000) {
+                now.difference(lastTrigger).inMilliseconds > 1500 &&
+                stability > 0.3) {
 
               lastResult = result;
               lastTrigger = now;
@@ -451,15 +380,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
               });
 
               print("✅ SIGN DETECTED: $result");
-              
-              // Speak in Urdu
-              if (urduSynonyms.containsKey(result)) {
-                await tts.speak(result);
-              } else {
-                await tts.speak(result);
-              }
-              
-              // Show video
+              await tts.speak(result);
               _showVideo(result);
             }
           }
@@ -569,8 +490,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     }
     
     String videoPath = signMap[key]!;
-    print("Playing video for: $key");
-    
     Navigator.push(
       context,
       MaterialPageRoute(
@@ -843,7 +762,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   @override
   void dispose() {
     controller?.dispose();
-    poseDetector.close();
+    handLandmarker.close();
     interpreter?.close();
     tts.stop();
     speech.stop();
@@ -963,11 +882,6 @@ class _VideoScreenState extends State<VideoScreen> {
                             onPressed: () => Navigator.pop(context),
                           ),
                         ],
-                      ),
-                      SizedBox(height: 10),
-                      Text(
-                        "Showing: ${widget.signName}",
-                        style: TextStyle(color: Colors.white70, fontSize: 14),
                       ),
                     ],
                   ),
