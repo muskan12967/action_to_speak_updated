@@ -4,19 +4,17 @@ import 'package:flutter_tts/flutter_tts.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 import 'package:tflite_flutter/tflite_flutter.dart';
 import 'package:video_player/video_player.dart';
-import 'package:google_mlkit_hand_landmark/google_mlkit_hand_landmark.dart';
-import 'package:google_mlkit_commons/google_mlkit_commons.dart';
+import 'package:hand_landmarker/hand_landmarker.dart';
 import 'dart:math';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// pubspec.yaml dependencies needed:
+// pubspec.yaml dependencies:
 //   camera: ^0.10.5+9
 //   flutter_tts: ^3.8.5
 //   speech_to_text: ^6.6.0
 //   tflite_flutter: ^0.10.4
 //   video_player: ^2.8.1
-//   google_mlkit_hand_landmark: ^0.1.0        ← CHANGED from pose_detection
-//   google_mlkit_commons: ^0.6.0
+//   hand_landmarker: ^2.2.0   ← no .task file needed, model is bundled
 // ─────────────────────────────────────────────────────────────────────────────
 
 class CameraDetectionScreen extends StatefulWidget {
@@ -28,9 +26,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
 
   CameraController? controller;
   Interpreter? interpreter;
-
-  // ── FIX 1: Use HandLandmarker instead of PoseDetector ──────────────────────
-  late HandLandmarker handLandmarker;
+  HandLandmarkerPlugin? handPlugin;
 
   FlutterTts tts = FlutterTts();
   stt.SpeechToText speech = stt.SpeechToText();
@@ -51,8 +47,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   DateTime lastTrigger = DateTime.now();
 
   final int SEQ_LEN = 25;
-  // 2 hands × 21 landmarks × 3 coords = 126  (unchanged — but now REAL data)
-  final int FEATURES_PER_FRAME = 126;
+  final int FEATURES_PER_FRAME = 126; // 2 hands x 21 landmarks x 3 coords
 
   final TextEditingController textController = TextEditingController();
   final FocusNode textFocusNode = FocusNode();
@@ -86,158 +81,76 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     "talibeilm": ["talibeilm", "student", "talib-e-ilam", "shagird"],
   };
 
-  // ── FIX 2: initialise HandLandmarker ──────────────────────────────────────
+  // ── Init ───────────────────────────────────────────────────────────────────
+
   @override
   void initState() {
     super.initState();
-
-    handLandmarker = HandLandmarker(
-      options: HandLandmarkerOptions(
-        baseOptions: BaseOptions(
-          modelAssetPath: 'assets/hand_landmarker.task',
-          // Download from:
-          // https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task
-          // and place in assets/ folder, add to pubspec.yaml assets list
-        ),
-        runningMode: RunningMode.liveStream,
-        numHands: 2,                     // detect up to 2 hands
-        minHandDetectionConfidence: 0.5,
-        minHandPresenceConfidence: 0.5,
-        minTrackingConfidence: 0.5,
-        resultCallback: _onHandLandmarks, // async callback for liveStream mode
-      ),
-    );
-
+    _initHandPlugin();
     loadModel();
     initTTS();
     initSpeech();
   }
 
-  // ── FIX 3: liveStream result callback ────────────────────────────────────
-  // In liveStream mode HandLandmarker calls this when results are ready.
-  void _onHandLandmarks(
-    HandLandmarkerResult result,
-    InputImage inputImage,
-    int timestamp,
-  ) {
-    if (!mounted) return;
-    _processHandResult(result);
+  void _initHandPlugin() {
+    try {
+      handPlugin = HandLandmarkerPlugin.create(
+        numHands: 2,
+        minHandDetectionConfidence: 0.5,
+        minTrackingConfidence: 0.5,
+      );
+      print("HandLandmarkerPlugin created");
+    } catch (e) {
+      print("HandLandmarkerPlugin error: $e");
+    }
   }
 
-  Future initTTS() async {
+  Future<void> initTTS() async {
     await tts.setLanguage("ur-PK");
     await tts.setSpeechRate(0.5);
     await tts.setPitch(1.0);
   }
 
-  Future initSpeech() async {
+  Future<void> initSpeech() async {
     try {
       bool available = await speech.initialize();
-      print(available
-          ? "Speech recognition available"
-          : "Speech recognition not available");
+      print(available ? "Speech available" : "Speech not available");
     } catch (e) {
-      print("Speech initialization error: $e");
+      print("Speech init error: $e");
     }
   }
 
-  Future loadModel() async {
+  Future<void> loadModel() async {
     try {
       setState(() => modelStatus = "Loading model...");
-
       interpreter = await Interpreter.fromAsset("assets/model.tflite");
-
       setState(() {
         isModelLoaded = true;
-        modelStatus = "✅ Model ready!";
+        modelStatus = "Model ready!";
       });
-
-      print("✅ Model loaded successfully!");
+      print("Model loaded!");
       print("Input  shape: ${interpreter!.getInputTensor(0).shape}");
       print("Output shape: ${interpreter!.getOutputTensor(0).shape}");
-
     } catch (e) {
       setState(() {
         isModelLoaded = false;
-        modelStatus = "❌ Error: ${e.toString().substring(0, min(35, e.toString().length))}";
+        modelStatus = "Error: ${e.toString().substring(0, min(40, e.toString().length))}";
       });
-      print("❌ Error loading model: $e");
+      print("Error loading model: $e");
       _showModelErrorDialog();
     }
   }
 
-  void _showModelErrorDialog() {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      showDialog(
-        context: context,
-        barrierDismissible: false,
-        builder: (context) => AlertDialog(
-          title: const Text("Model File Missing"),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: const [
-              Text("model.tflite not found!",
-                  style: TextStyle(fontWeight: FontWeight.bold, color: Colors.red)),
-              SizedBox(height: 10),
-              Text("Please ensure:", style: TextStyle(fontWeight: FontWeight.bold)),
-              SizedBox(height: 5),
-              Text("1. Copy 'model.tflite' to 'assets/' folder"),
-              Text("2. Copy 'hand_landmarker.task' to 'assets/' folder"),
-              Text("3. Update pubspec.yaml with both assets"),
-              Text("4. Run: flutter clean && flutter pub get"),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text("OK"),
-            ),
-          ],
-        ),
-      );
-    });
-  }
+  // ── Camera ─────────────────────────────────────────────────────────────────
 
-  // ── Camera helpers ─────────────────────────────────────────────────────────
-
-  Future initCamera() async {
-    if (!isModelLoaded) {
-      _showSnackBar("Model not loaded. Please fix model file.");
-      return;
-    }
-    try {
-      final cams = await availableCameras();
-      final frontCam = cams.firstWhere(
-        (c) => c.lensDirection == CameraLensDirection.front,
-      );
-
-      controller = CameraController(
-        frontCam,
-        ResolutionPreset.medium,
-        enableAudio: false,
-      );
-
-      await controller!.initialize();
-      setState(() {});
-
-      if (!isStreamActive && isModelLoaded) {
-        startStream();
-      }
-    } catch (e) {
-      print("Camera error: $e");
-      _showSnackBar("Camera error: $e");
-    }
-  }
-
-  Future toggleCamera() async {
+  Future<void> toggleCamera() async {
     if (isCameraOn) {
       await controller?.stopImageStream();
       await controller?.dispose();
       controller = null;
       setState(() {
         isCameraOn = false;
-        isStreamActive = false; // ← FIX 4: reset flag in setState
+        isStreamActive = false;
       });
     } else {
       if (!isModelLoaded) {
@@ -245,72 +158,82 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
         return;
       }
       setState(() => isCameraOn = true);
-      await initCamera();
+      await _initCamera();
     }
   }
 
-  InputImage _inputImageFromCamera(CameraImage image, CameraDescription camera) {
-    final plane = image.planes[0];
-    return InputImage.fromBytes(
-      bytes: plane.bytes,
-      metadata: InputImageMetadata(
-        size: Size(image.width.toDouble(), image.height.toDouble()),
-        rotation: InputImageRotationValue.fromRawValue(camera.sensorOrientation)
-            ?? InputImageRotation.rotation0deg,
-        format: InputImageFormatValue.fromRawValue(image.format.raw)
-            ?? InputImageFormat.nv21,
-        bytesPerRow: plane.bytesPerRow,
-      ),
-    );
+  Future<void> _initCamera() async {
+    try {
+      final cams = await availableCameras();
+      final frontCam = cams.firstWhere(
+        (c) => c.lensDirection == CameraLensDirection.front,
+        orElse: () => cams.first,
+      );
+      controller = CameraController(
+        frontCam,
+        ResolutionPreset.medium,
+        enableAudio: false,
+      );
+      await controller!.initialize();
+      setState(() {});
+      if (!isStreamActive && isModelLoaded) {
+        _startStream();
+      }
+    } catch (e) {
+      print("Camera error: $e");
+      _showSnackBar("Camera error: $e");
+    }
   }
 
-  // ── FIX 5: Extract REAL hand landmarks (21 pts × 2 hands × 3 = 126) ───────
-  List<double> _extractFeaturesFromResult(HandLandmarkerResult result) {
-    // We always produce exactly 126 values: hand0 (63) + hand1 (63).
-    // Missing hands are filled with zeros — same convention as training data.
+  // ── Stream & detection ─────────────────────────────────────────────────────
+
+  void _startStream() {
+    if (controller == null || isStreamActive || !isModelLoaded) return;
+    if (handPlugin == null) {
+      _showSnackBar("Hand detector not ready.");
+      return;
+    }
+
+    isStreamActive = true; // set BEFORE startImageStream to block re-entry
+
+    controller!.startImageStream((CameraImage image) async {
+      if (isProcessing) return;
+      isProcessing = true;
+
+      try {
+        // hand_landmarker detects directly from CameraImage, no conversion needed
+        final List<Hand> hands = await handPlugin!.detect(image);
+        _processHandResult(hands);
+      } catch (e) {
+        print("Stream error: $e");
+      }
+
+      isProcessing = false;
+    });
+  }
+
+  void _processHandResult(List<Hand> hands) {
+    // Each hand: 21 landmarks x 3 coords = 63 values, normalised to wrist
     List<double> hand0 = List.filled(63, 0.0);
     List<double> hand1 = List.filled(63, 0.0);
 
-    if (result.landmarks.isNotEmpty) {
-      hand0 = _landmarkToFeatures(result.landmarks[0]);
+    if (hands.isNotEmpty) {
+      hand0 = _handToFeatures(hands[0]);
     }
-    if (result.landmarks.length >= 2) {
-      hand1 = _landmarkToFeatures(result.landmarks[1]);
+    if (hands.length >= 2) {
+      hand1 = _handToFeatures(hands[1]);
     }
 
-    return [...hand0, ...hand1]; // 126 values total
-  }
-
-  List<double> _landmarkToFeatures(List<NormalizedLandmark> landmarks) {
-    // Normalise relative to landmark 0 (wrist) so position-invariant
-    final wristX = landmarks[0].x;
-    final wristY = landmarks[0].y;
-    final wristZ = landmarks[0].z;
-
-    List<double> features = [];
-    for (final lm in landmarks) {           // 21 landmarks
-      features.add(lm.x - wristX);         // x relative to wrist
-      features.add(lm.y - wristY);         // y relative to wrist
-      features.add(lm.z - wristZ);         // z relative to wrist
-    }
-    return features; // 63 values
-  }
-
-  // ── FIX 6: Drive sequence + prediction from the liveStream callback ────────
-  void _processHandResult(HandLandmarkerResult result) {
-    if (!isModelLoaded) return;
-
-    final frame = _extractFeaturesFromResult(result);
+    final List<double> frame = [...hand0, ...hand1]; // 126 values
     sequence.add(frame);
     if (sequence.length > SEQ_LEN) sequence.removeAt(0);
 
     if (sequence.length == SEQ_LEN) {
-      final prediction = predict(sequence);
-      final now = DateTime.now();
+      final String prediction = predict(sequence);
+      final DateTime now = DateTime.now();
 
       if (prediction != "unknown") {
-        // FIX 7: lowered stability threshold to 0.1 so normal signing passes
-        final stability = checkSequenceStability(sequence);
+        final double stability = checkSequenceStability(sequence);
 
         if (prediction != lastResult &&
             now.difference(lastTrigger).inMilliseconds > 1500 &&
@@ -323,7 +246,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
             setState(() => detectedText = prediction);
           }
 
-          print("✅ SIGN DETECTED: $prediction");
+          print("SIGN DETECTED: $prediction");
           tts.speak(prediction);
           _showVideo(prediction);
         }
@@ -331,39 +254,28 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     }
   }
 
-  // ── FIX 8: stream now only sends frames to HandLandmarker (no processing here)
-  void startStream() {
-    if (controller == null || isStreamActive || !isModelLoaded) return;
+  // Normalise all 21 landmarks relative to wrist (landmark index 0)
+  List<double> _handToFeatures(Hand hand) {
+    final double wristX = hand.landmarks[0].x;
+    final double wristY = hand.landmarks[0].y;
+    final double wristZ = hand.landmarks[0].z;
 
-    // Mark active BEFORE starting so re-entrant calls are blocked
-    isStreamActive = true; // FIX 9: set before startImageStream
-
-    int frameTimestamp = 0;
-
-    controller!.startImageStream((image) {
-      if (isProcessing) return;
-      isProcessing = true;
-
-      try {
-        final inputImage = _inputImageFromCamera(image, controller!.description);
-        frameTimestamp += 33; // ~30 fps in ms
-        // liveStream mode: result arrives in _onHandLandmarks callback
-        handLandmarker.detectAsync(inputImage, frameTimestamp);
-      } catch (e) {
-        print("Stream error: $e");
-      }
-
-      isProcessing = false;
-    });
+    List<double> features = [];
+    for (final Landmark lm in hand.landmarks) {
+      features.add(lm.x - wristX);
+      features.add(lm.y - wristY);
+      features.add(lm.z - wristZ);
+    }
+    return features; // 63 values
   }
 
-  // ── Model inference (unchanged logic, same input shape) ────────────────────
+  // ── Model inference ────────────────────────────────────────────────────────
+
   String predict(List<List<double>> seq) {
     if (interpreter == null || !isModelLoaded) return "unknown";
 
     try {
-      // shape: [1, SEQ_LEN, FEATURES_PER_FRAME]
-      final List<List<List<double>>> input = [seq];
+      final List<List<List<double>>> input = [seq]; // [1, 25, 126]
       final output = List.generate(1, (_) => List.filled(labels.length, 0.0));
 
       interpreter!.run(input, output);
@@ -377,11 +289,11 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
         }
       }
 
-      print("🎯 Prediction: ${labels[idx]} (confidence: ${maxVal.toStringAsFixed(3)})");
+      print("${labels[idx]} (${maxVal.toStringAsFixed(3)})");
       return maxVal > 0.5 ? labels[idx] : "unknown";
 
     } catch (e) {
-      print("❌ Prediction error: $e");
+      print("Prediction error: $e");
       return "unknown";
     }
   }
@@ -402,20 +314,19 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     }
 
     if (comparisons == 0) return 0.0;
-    final avgVariance = totalVariance / comparisons;
-    return 1.0 - (avgVariance.clamp(0.0, 0.8) / 0.8);
+    final double avg = totalVariance / comparisons;
+    return 1.0 - (avg.clamp(0.0, 0.8) / 0.8);
   }
 
   // ── Text / voice input ─────────────────────────────────────────────────────
 
   void handleTextInput(String text) {
-    final input = text.toLowerCase().trim();
+    final String input = text.toLowerCase().trim();
     if (input.isEmpty) { _showSnackBar("Please enter some text"); return; }
 
-    print("Searching for: $input");
     textController.clear();
+    final String? matched = _findMatch(input);
 
-    final matched = _findMatch(input);
     if (matched != null) {
       setState(() => detectedText = matched);
       tts.speak("یہ $matched کا اشارہ ہے");
@@ -442,23 +353,22 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     if (isListening) {
       await speech.stop();
       setState(() { isListening = false; micStatus = "Mic off"; });
-      _showSnackBar("Microphone stopped");
     } else {
-      final available = await speech.initialize();
+      final bool available = await speech.initialize();
       if (available) {
         setState(() {
           isListening = true;
-          micStatus = "🎤 Listening...";
+          micStatus = "Listening...";
           detectedText = "Listening...";
         });
         speech.listen(
           onResult: (result) {
-            final spokenText = result.recognizedWords;
-            print("Heard: $spokenText");
-            setState(() => detectedText = "Heard: $spokenText");
+            final String spoken = result.recognizedWords;
+            print("Heard: $spoken");
+            setState(() => detectedText = "Heard: $spoken");
             speech.stop();
             setState(() { isListening = false; micStatus = "Mic off"; });
-            handleTextInput(spokenText);
+            handleTextInput(spoken);
           },
         );
         _showSnackBar("Listening... Speak now");
@@ -467,6 +377,8 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
       }
     }
   }
+
+  // ── Helpers ────────────────────────────────────────────────────────────────
 
   void _showVideo(String key) {
     if (!signMap.containsKey(key)) { _showSnackBar("Video not found for: $key"); return; }
@@ -485,7 +397,35 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   void clearText() {
     textController.clear();
     setState(() => detectedText = "");
-    _showSnackBar("Text cleared");
+  }
+
+  void _showModelErrorDialog() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => AlertDialog(
+          title: const Text("Model File Missing"),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: const [
+              Text("model.tflite not found!",
+                  style: TextStyle(fontWeight: FontWeight.bold, color: Colors.red)),
+              SizedBox(height: 8),
+              Text("1. Copy 'model.tflite' to assets/ folder"),
+              Text("2. Add it to pubspec.yaml under assets"),
+              Text("3. Run: flutter clean && flutter pub get"),
+            ],
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text("OK")),
+          ],
+        ),
+      );
+    });
   }
 
   void _showInfoDialog() {
@@ -497,13 +437,14 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text("1. 📷 Turn ON camera"),
-            const Text("2. 🤚 Perform hand sign in front of camera"),
-            const Text("3. 📢 App will speak the sign name"),
-            const Text("4. ✍️ Type Roman Urdu words directly"),
-            const Text("5. 🎤 Click mic to speak words"),
+            const Text("1. Turn ON camera"),
+            const Text("2. Perform hand sign in front of camera"),
+            const Text("3. App will speak the sign name"),
+            const Text("4. Type Roman Urdu words directly"),
+            const Text("5. Click mic to speak words"),
             const SizedBox(height: 10),
-            const Text("Available signs:", style: TextStyle(fontWeight: FontWeight.bold)),
+            const Text("Available signs:",
+                style: TextStyle(fontWeight: FontWeight.bold)),
             Wrap(
               spacing: 8,
               children: signMap.keys.map((k) => Chip(label: Text(k))).toList(),
@@ -511,13 +452,15 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
           ],
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text("OK")),
+          TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text("OK")),
         ],
       ),
     );
   }
 
-  // ── UI ─────────────────────────────────────────────────────────────────────
+  // ── Build ──────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
@@ -527,7 +470,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
         backgroundColor: Colors.blue,
         foregroundColor: Colors.white,
         bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(30),
+          preferredSize: const Size.fromHeight(28),
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
             alignment: Alignment.centerLeft,
@@ -540,6 +483,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
       ),
       body: Column(
         children: [
+
           // Camera preview
           Expanded(
             flex: 2,
@@ -569,7 +513,8 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
                               onPressed: toggleCamera,
                               style: ElevatedButton.styleFrom(
                                   backgroundColor: Colors.blue),
-                              child: const Text("Turn ON Camera"),
+                              child: const Text("Turn ON Camera",
+                                  style: TextStyle(color: Colors.white)),
                             ),
                           ],
                         ),
@@ -597,8 +542,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
                     style: TextStyle(
                       fontSize: 18,
                       fontWeight: FontWeight.bold,
-                      color:
-                          detectedText.isEmpty ? Colors.grey : Colors.black,
+                      color: detectedText.isEmpty ? Colors.grey : Colors.black,
                     ),
                   ),
                 ),
@@ -606,9 +550,9 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
             ),
           ),
 
-          // Text input row
+          // Text input
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
             child: Row(
               children: [
                 Expanded(
@@ -616,8 +560,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
                     controller: textController,
                     focusNode: textFocusNode,
                     decoration: InputDecoration(
-                      hintText:
-                          "Type Roman Urdu (e.g., baap, dost, ghar)",
+                      hintText: "Type Roman Urdu (e.g., baap, dost, ghar)",
                       border: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(8)),
                       prefixIcon: const Icon(Icons.keyboard),
@@ -651,7 +594,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
             ),
           ),
 
-          // Quick-pick chips
+          // Quick chips
           SizedBox(
             height: 50,
             child: ListView(
@@ -662,10 +605,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
                   padding: const EdgeInsets.symmetric(horizontal: 4),
                   child: ActionChip(
                     label: Text(key),
-                    onPressed: () {
-                      textController.text = key;
-                      handleTextInput(key);
-                    },
+                    onPressed: () => handleTextInput(key),
                     backgroundColor: Colors.blue.shade100,
                   ),
                 );
@@ -679,7 +619,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceEvenly,
               children: [
-                _controlButton(
+                _controlBtn(
                   icon: isCameraOn ? Icons.videocam : Icons.videocam_off,
                   color: Colors.blue,
                   label: isCameraOn ? "Camera ON" : "Camera OFF",
@@ -688,7 +628,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
                 Stack(
                   alignment: Alignment.topRight,
                   children: [
-                    _controlButton(
+                    _controlBtn(
                       icon: isListening ? Icons.mic : Icons.mic_none,
                       color: isListening ? Colors.red : Colors.grey,
                       label: micStatus,
@@ -702,14 +642,12 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
                           width: 10,
                           height: 10,
                           decoration: const BoxDecoration(
-                            color: Colors.red,
-                            shape: BoxShape.circle,
-                          ),
+                              color: Colors.red, shape: BoxShape.circle),
                         ),
                       ),
                   ],
                 ),
-                _controlButton(
+                _controlBtn(
                   icon: Icons.info,
                   color: Colors.orange,
                   label: "Help",
@@ -723,7 +661,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     );
   }
 
-  Widget _controlButton({
+  Widget _controlBtn({
     required IconData icon,
     required Color color,
     required String label,
@@ -732,10 +670,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        IconButton(
-          icon: Icon(icon, color: color, size: 40),
-          onPressed: onTap,
-        ),
+        IconButton(icon: Icon(icon, color: color, size: 40), onPressed: onTap),
         Text(label, style: const TextStyle(fontSize: 12)),
       ],
     );
@@ -746,7 +681,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   @override
   void dispose() {
     controller?.dispose();
-    handLandmarker.close();   // ← was poseDetector.close()
+    handPlugin?.dispose();
     interpreter?.close();
     tts.stop();
     speech.stop();
@@ -757,7 +692,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// VideoScreen — unchanged
+// VideoScreen
 // ─────────────────────────────────────────────────────────────────────────────
 
 class VideoScreen extends StatefulWidget {
@@ -800,6 +735,7 @@ class _VideoScreenState extends State<VideoScreen> {
       appBar: AppBar(
         title: Text("Sign: ${widget.signName.toUpperCase()}"),
         backgroundColor: Colors.black,
+        foregroundColor: Colors.white,
       ),
       backgroundColor: Colors.black,
       body: Center(
@@ -822,14 +758,12 @@ class _VideoScreenState extends State<VideoScreen> {
                       const SizedBox(height: 20),
                       const Text("Video not found!",
                           style: TextStyle(color: Colors.white)),
-                      const SizedBox(height: 10),
                       Text("Sign: ${widget.signName}",
                           style: const TextStyle(color: Colors.white70)),
                       const SizedBox(height: 20),
                       ElevatedButton(
-                        onPressed: () => Navigator.pop(context),
-                        child: const Text("Go Back"),
-                      ),
+                          onPressed: () => Navigator.pop(context),
+                          child: const Text("Go Back")),
                     ],
                   )
                 : Column(
@@ -851,13 +785,11 @@ class _VideoScreenState extends State<VideoScreen> {
                               color: Colors.white,
                               size: 40,
                             ),
-                            onPressed: () {
-                              setState(() {
-                                controller.value.isPlaying
-                                    ? controller.pause()
-                                    : controller.play();
-                              });
-                            },
+                            onPressed: () => setState(() {
+                              controller.value.isPlaying
+                                  ? controller.pause()
+                                  : controller.play();
+                            }),
                           ),
                           IconButton(
                             icon: const Icon(Icons.replay,
