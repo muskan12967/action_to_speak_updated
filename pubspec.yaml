@@ -19,7 +19,7 @@ dependencies:
   image_picker: ^1.0.7
   image: ^4.1.7
   speech_to_text: ^6.6.2
-  camera: ^0.10.5
+  camera: ^0.11.1
   flutter_tts: ^3.8.5
   tflite_flutter: ^0.12.0
   google_mlkit_pose_detection: ^0.13.0
