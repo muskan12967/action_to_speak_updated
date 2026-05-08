@@ -6,16 +6,9 @@ import 'package:tflite_flutter/tflite_flutter.dart';
 import 'package:video_player/video_player.dart';
 import 'package:hand_landmarker/hand_landmarker.dart';
 import 'dart:math';
-
-// ─────────────────────────────────────────────────────────────────────────────
-// pubspec.yaml dependencies:
-//   camera: ^0.10.5+9
-//   flutter_tts: ^3.8.5
-//   speech_to_text: ^6.6.0
-//   tflite_flutter: ^0.10.4
-//   video_player: ^2.8.1
-//   hand_landmarker: ^2.2.0   ← no .task file needed, model is bundled
-// ─────────────────────────────────────────────────────────────────────────────
+import 'dart:io';
+import 'package:flutter/services.dart' show rootBundle;
+import 'package:image/image.dart' as img;
 
 class CameraDetectionScreen extends StatefulWidget {
   @override
@@ -81,8 +74,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     "talibeilm": ["talibeilm", "student", "talib-e-ilam", "shagird"],
   };
 
-  // ── Init ───────────────────────────────────────────────────────────────────
-
   @override
   void initState() {
     super.initState();
@@ -94,14 +85,12 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
 
   void _initHandPlugin() {
     try {
-      handPlugin = HandLandmarkerPlugin.create(
-        numHands: 2,
-        minHandDetectionConfidence: 0.5,
-        minTrackingConfidence: 0.5,
-      );
+      // For hand_landmarker 2.2.0 - different API
+      handPlugin = HandLandmarkerPlugin.create();
       print("HandLandmarkerPlugin created");
     } catch (e) {
       print("HandLandmarkerPlugin error: $e");
+      handPlugin = null;
     }
   }
 
@@ -134,14 +123,12 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     } catch (e) {
       setState(() {
         isModelLoaded = false;
-        modelStatus = "Error: ${e.toString().substring(0, min(40, e.toString().length))}";
+        modelStatus = "Error: ${e.toString().substring(0, 40)}";
       });
       print("Error loading model: $e");
       _showModelErrorDialog();
     }
   }
-
-  // ── Camera ─────────────────────────────────────────────────────────────────
 
   Future<void> toggleCamera() async {
     if (isCameraOn) {
@@ -176,7 +163,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
       );
       await controller!.initialize();
       setState(() {});
-      if (!isStreamActive && isModelLoaded) {
+      if (!isStreamActive && isModelLoaded && handPlugin != null) {
         _startStream();
       }
     } catch (e) {
@@ -185,7 +172,43 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     }
   }
 
-  // ── Stream & detection ─────────────────────────────────────────────────────
+  // Convert CameraImage to bytes for hand_landmarker
+  Future<List<int>> convertCameraImageToBytes(CameraImage image) async {
+    try {
+      final int width = image.width;
+      final int height = image.height;
+      
+      final yPlane = image.planes[0];
+      final uPlane = image.planes[1];
+      final vPlane = image.planes[2];
+      
+      final List<int> rgbData = List.filled(width * height * 3, 0);
+      
+      for (int i = 0; i < height; i++) {
+        for (int j = 0; j < width; j++) {
+          final int yIndex = i * width + j;
+          final int uvIndex = (i ~/ 2) * (width ~/ 2) + (j ~/ 2);
+          
+          final int y = yPlane.bytes[yIndex] & 0xFF;
+          final int u = uPlane.bytes[uvIndex] & 0xFF;
+          final int v = vPlane.bytes[uvIndex] & 0xFF;
+          
+          int r = (y + 1.402 * (v - 128)).toInt();
+          int g = (y - 0.34414 * (u - 128) - 0.71414 * (v - 128)).toInt();
+          int b = (y + 1.772 * (u - 128)).toInt();
+          
+          rgbData[yIndex * 3] = r.clamp(0, 255);
+          rgbData[yIndex * 3 + 1] = g.clamp(0, 255);
+          rgbData[yIndex * 3 + 2] = b.clamp(0, 255);
+        }
+      }
+      
+      return rgbData;
+    } catch (e) {
+      print("Convert error: $e");
+      return [];
+    }
+  }
 
   void _startStream() {
     if (controller == null || isStreamActive || !isModelLoaded) return;
@@ -194,16 +217,25 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
       return;
     }
 
-    isStreamActive = true; // set BEFORE startImageStream to block re-entry
+    isStreamActive = true;
 
     controller!.startImageStream((CameraImage image) async {
       if (isProcessing) return;
       isProcessing = true;
 
       try {
-        // hand_landmarker detects directly from CameraImage, no conversion needed
-        final List<Hand> hands = await handPlugin!.detect(image);
-        _processHandResult(hands);
+        final bytes = await convertCameraImageToBytes(image);
+        if (bytes.isEmpty) {
+          isProcessing = false;
+          return;
+        }
+        
+        // For hand_landmarker 2.2.0 - detect from bytes
+        final result = await handPlugin!.detectFromBytes(bytes, image.width, image.height);
+        
+        if (result != null && result.hands != null) {
+          _processHandResult(result.hands!);
+        }
       } catch (e) {
         print("Stream error: $e");
       }
@@ -213,7 +245,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   }
 
   void _processHandResult(List<Hand> hands) {
-    // Each hand: 21 landmarks x 3 coords = 63 values, normalised to wrist
     List<double> hand0 = List.filled(63, 0.0);
     List<double> hand1 = List.filled(63, 0.0);
 
@@ -224,7 +255,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
       hand1 = _handToFeatures(hands[1]);
     }
 
-    final List<double> frame = [...hand0, ...hand1]; // 126 values
+    final List<double> frame = [...hand0, ...hand1];
     sequence.add(frame);
     if (sequence.length > SEQ_LEN) sequence.removeAt(0);
 
@@ -254,7 +285,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     }
   }
 
-  // Normalise all 21 landmarks relative to wrist (landmark index 0)
   List<double> _handToFeatures(Hand hand) {
     final double wristX = hand.landmarks[0].x;
     final double wristY = hand.landmarks[0].y;
@@ -266,16 +296,14 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
       features.add(lm.y - wristY);
       features.add(lm.z - wristZ);
     }
-    return features; // 63 values
+    return features;
   }
-
-  // ── Model inference ────────────────────────────────────────────────────────
 
   String predict(List<List<double>> seq) {
     if (interpreter == null || !isModelLoaded) return "unknown";
 
     try {
-      final List<List<List<double>>> input = [seq]; // [1, 25, 126]
+      final List<List<List<double>>> input = [seq];
       final output = List.generate(1, (_) => List.filled(labels.length, 0.0));
 
       interpreter!.run(input, output);
@@ -317,8 +345,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     final double avg = totalVariance / comparisons;
     return 1.0 - (avg.clamp(0.0, 0.8) / 0.8);
   }
-
-  // ── Text / voice input ─────────────────────────────────────────────────────
 
   void handleTextInput(String text) {
     final String input = text.toLowerCase().trim();
@@ -377,8 +403,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
       }
     }
   }
-
-  // ── Helpers ────────────────────────────────────────────────────────────────
 
   void _showVideo(String key) {
     if (!signMap.containsKey(key)) { _showSnackBar("Video not found for: $key"); return; }
@@ -460,8 +484,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     );
   }
 
-  // ── Build ──────────────────────────────────────────────────────────────────
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -483,8 +505,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
       ),
       body: Column(
         children: [
-
-          // Camera preview
           Expanded(
             flex: 2,
             child: Container(
@@ -495,26 +515,20 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
               ),
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(10),
-                child: isCameraOn &&
-                        controller != null &&
-                        controller!.value.isInitialized
+                child: isCameraOn && controller != null && controller!.value.isInitialized
                     ? CameraPreview(controller!)
                     : Center(
                         child: Column(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
-                            const Icon(Icons.videocam_off,
-                                size: 64, color: Colors.grey),
+                            const Icon(Icons.videocam_off, size: 64, color: Colors.grey),
                             const SizedBox(height: 10),
-                            const Text("Camera is OFF",
-                                style: TextStyle(fontSize: 16)),
+                            const Text("Camera is OFF", style: TextStyle(fontSize: 16)),
                             const SizedBox(height: 10),
                             ElevatedButton(
                               onPressed: toggleCamera,
-                              style: ElevatedButton.styleFrom(
-                                  backgroundColor: Colors.blue),
-                              child: const Text("Turn ON Camera",
-                                  style: TextStyle(color: Colors.white)),
+                              style: ElevatedButton.styleFrom(backgroundColor: Colors.blue),
+                              child: const Text("Turn ON Camera", style: TextStyle(color: Colors.white)),
                             ),
                           ],
                         ),
@@ -522,8 +536,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
               ),
             ),
           ),
-
-          // Detection result banner
+          
           Container(
             margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             padding: const EdgeInsets.all(12),
@@ -549,8 +562,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
               ],
             ),
           ),
-
-          // Text input
+          
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
             child: Row(
@@ -561,8 +573,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
                     focusNode: textFocusNode,
                     decoration: InputDecoration(
                       hintText: "Type Roman Urdu (e.g., baap, dost, ghar)",
-                      border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(8)),
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
                       prefixIcon: const Icon(Icons.keyboard),
                       suffixIcon: textController.text.isNotEmpty
                           ? IconButton(
@@ -585,16 +596,14 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
                   },
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.green,
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 20, vertical: 16),
+                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
                   ),
                   child: const Icon(Icons.send, color: Colors.white),
                 ),
               ],
             ),
           ),
-
-          // Quick chips
+          
           SizedBox(
             height: 50,
             child: ListView(
@@ -612,8 +621,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
               }).toList(),
             ),
           ),
-
-          // Control buttons
+          
           Padding(
             padding: const EdgeInsets.all(16),
             child: Row(
@@ -641,8 +649,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
                         child: Container(
                           width: 10,
                           height: 10,
-                          decoration: const BoxDecoration(
-                              color: Colors.red, shape: BoxShape.circle),
+                          decoration: const BoxDecoration(color: Colors.red, shape: BoxShape.circle),
                         ),
                       ),
                   ],
@@ -676,8 +683,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     );
   }
 
-  // ── Dispose ────────────────────────────────────────────────────────────────
-
   @override
   void dispose() {
     controller?.dispose();
@@ -690,10 +695,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     super.dispose();
   }
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// VideoScreen
-// ─────────────────────────────────────────────────────────────────────────────
 
 class VideoScreen extends StatefulWidget {
   final String path;
@@ -745,21 +746,17 @@ class _VideoScreenState extends State<VideoScreen> {
                 children: [
                   CircularProgressIndicator(color: Colors.blue),
                   SizedBox(height: 20),
-                  Text("Loading video...",
-                      style: TextStyle(color: Colors.white)),
+                  Text("Loading video...", style: TextStyle(color: Colors.white)),
                 ],
               )
             : hasError
                 ? Column(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      const Icon(Icons.error_outline,
-                          color: Colors.red, size: 60),
+                      const Icon(Icons.error_outline, color: Colors.red, size: 60),
                       const SizedBox(height: 20),
-                      const Text("Video not found!",
-                          style: TextStyle(color: Colors.white)),
-                      Text("Sign: ${widget.signName}",
-                          style: const TextStyle(color: Colors.white70)),
+                      const Text("Video not found!", style: TextStyle(color: Colors.white)),
+                      Text("Sign: ${widget.signName}", style: const TextStyle(color: Colors.white70)),
                       const SizedBox(height: 20),
                       ElevatedButton(
                           onPressed: () => Navigator.pop(context),
@@ -779,29 +776,23 @@ class _VideoScreenState extends State<VideoScreen> {
                         children: [
                           IconButton(
                             icon: Icon(
-                              controller.value.isPlaying
-                                  ? Icons.pause
-                                  : Icons.play_arrow,
+                              controller.value.isPlaying ? Icons.pause : Icons.play_arrow,
                               color: Colors.white,
                               size: 40,
                             ),
                             onPressed: () => setState(() {
-                              controller.value.isPlaying
-                                  ? controller.pause()
-                                  : controller.play();
+                              controller.value.isPlaying ? controller.pause() : controller.play();
                             }),
                           ),
                           IconButton(
-                            icon: const Icon(Icons.replay,
-                                color: Colors.white, size: 40),
+                            icon: const Icon(Icons.replay, color: Colors.white, size: 40),
                             onPressed: () {
                               controller.seekTo(Duration.zero);
                               controller.play();
                             },
                           ),
                           IconButton(
-                            icon: const Icon(Icons.close,
-                                color: Colors.white, size: 40),
+                            icon: const Icon(Icons.close, color: Colors.white, size: 40),
                             onPressed: () => Navigator.pop(context),
                           ),
                         ],
