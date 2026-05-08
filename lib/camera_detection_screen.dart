@@ -4,7 +4,8 @@ import 'package:flutter_tts/flutter_tts.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 import 'package:tflite_flutter/tflite_flutter.dart';
 import 'package:video_player/video_player.dart';
-import 'package:google_mlkit_hand_landmarker/google_mlkit_hand_landmarker.dart';
+import 'package:hand_landmarker/hand_landmarker.dart';
+
 import 'dart:math';
 import 'package:flutter/services.dart' show rootBundle;
 
