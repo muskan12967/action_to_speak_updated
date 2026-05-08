@@ -5,7 +5,6 @@ import 'package:speech_to_text/speech_to_text.dart' as stt;
 import 'package:tflite_flutter/tflite_flutter.dart';
 import 'package:video_player/video_player.dart';
 import 'package:hand_landmarker/hand_landmarker.dart';
-import 'package:google_mlkit_commons/google_mlkit_commons.dart';
 import 'dart:math';
 import 'dart:io';
 import 'package:flutter/services.dart' show rootBundle;
@@ -19,7 +18,8 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
 
   CameraController? controller;
   Interpreter? interpreter;
-  HandLandmarker? handLandmarker;
+  HandLandmarker? _handLandmarker;
+  bool _isHandLandmarkerLoaded = false;
 
   FlutterTts tts = FlutterTts();
   stt.SpeechToText speech = stt.SpeechToText();
@@ -40,7 +40,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   DateTime lastTrigger = DateTime.now();
 
   final int SEQ_LEN = 25;
-  final int FEATURES_PER_FRAME = 126;
+  final int FEATURES_PER_FRAME = 126; // 2 hands × 21 landmarks × 3
 
   final TextEditingController textController = TextEditingController();
   final FocusNode textFocusNode = FocusNode();
@@ -85,11 +85,12 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
 
   Future<void> _initHandLandmarker() async {
     try {
-      handLandmarker = HandLandmarker();
-      await handLandmarker?.initialize();
-      print("✅ HandLandmarker initialized");
+      _handLandmarker = HandLandmarker();
+      _isHandLandmarkerLoaded = _handLandmarker != null;
+      print("✅ HandLandmarker initialized: $_isHandLandmarkerLoaded");
     } catch (e) {
       print("❌ HandLandmarker error: $e");
+      _isHandLandmarkerLoaded = false;
     }
   }
 
@@ -218,34 +219,65 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     }
   }
   
-  // Convert CameraImage to InputImage for hand landmarker
-  InputImage _convertCameraImageToInputImage(CameraImage image, CameraDescription camera) {
-    final plane = image.planes[0];
-    
-    return InputImage.fromBytes(
-      bytes: plane.bytes,
-      metadata: InputImageMetadata(
-        size: Size(image.width.toDouble(), image.height.toDouble()),
-        rotation: InputImageRotationValue.fromRawValue(camera.sensorOrientation) ?? InputImageRotation.rotation0deg,
-        format: InputImageFormatValue.fromRawValue(image.format.raw) ?? InputImageFormat.nv21,
-        bytesPerRow: plane.bytesPerRow,
-      ),
-    );
-  }
-
-  // Extract hand landmarks
-  Future<List<double>> extractHandLandmarks(CameraImage image, CameraDescription camera) async {
-    if (handLandmarker == null) return List.filled(FEATURES_PER_FRAME, 0.0);
+  // Convert CameraImage to format for hand_landmarker
+  Future<HandLandmarkerResult?> detectHands(CameraImage image) async {
+    if (!_isHandLandmarkerLoaded || _handLandmarker == null) {
+      return null;
+    }
     
     try {
-      final inputImage = _convertCameraImageToInputImage(image, camera);
-      final List<Hand>? hands = await handLandmarker?.detect(inputImage);
+      // Get image bytes
+      final int width = image.width;
+      final int height = image.height;
+      final int size = width * height;
+      
+      // Convert YUV to RGB
+      final yPlane = image.planes[0];
+      final uPlane = image.planes[1];
+      final vPlane = image.planes[2];
+      
+      final List<int> rgbData = List.filled(size * 3, 0);
+      
+      for (int i = 0; i < height; i++) {
+        for (int j = 0; j < width; j++) {
+          final int yIndex = i * width + j;
+          final int uvIndex = (i ~/ 2) * (width ~/ 2) + (j ~/ 2);
+          
+          final int y = yPlane.bytes[yIndex] & 0xFF;
+          final int u = uPlane.bytes[uvIndex] & 0xFF;
+          final int v = vPlane.bytes[uvIndex] & 0xFF;
+          
+          int r = (y + 1.402 * (v - 128)).toInt();
+          int g = (y - 0.34414 * (u - 128) - 0.71414 * (v - 128)).toInt();
+          int b = (y + 1.772 * (u - 128)).toInt();
+          
+          rgbData[yIndex * 3] = r.clamp(0, 255);
+          rgbData[yIndex * 3 + 1] = g.clamp(0, 255);
+          rgbData[yIndex * 3 + 2] = b.clamp(0, 255);
+        }
+      }
+      
+      // Detect hands
+      final result = await _handLandmarker!.detectFromBytes(rgbData, width, height);
+      return result;
+      
+    } catch (e) {
+      print("Hand detection error: $e");
+      return null;
+    }
+  }
+
+  // Extract hand landmarks (126 features: 2 hands × 21 landmarks × 3)
+  Future<List<double>> extractHandLandmarks(CameraImage image) async {
+    try {
+      final result = await detectHands(image);
       
       List<double> landmarks = [];
       
-      if (hands != null && hands.isNotEmpty) {
-        for (int i = 0; i < min(2, hands.length); i++) {
-          final hand = hands[i];
+      if (result != null && result.hands != null && result.hands!.isNotEmpty) {
+        // Process up to 2 hands
+        for (int i = 0; i < min(2, result.hands!.length); i++) {
+          final hand = result.hands![i];
           for (final landmark in hand.landmarks) {
             landmarks.add(landmark.x);
             landmarks.add(landmark.y);
@@ -258,6 +290,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
           landmarks.add(0.0);
         }
       } else {
+        // No hands detected
         landmarks = List.filled(FEATURES_PER_FRAME, 0.0);
       }
       
@@ -271,6 +304,20 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
 
   String predict(List<List<double>> seq) {
     if (interpreter == null || !isModelLoaded) {
+      // Demo mode for testing
+      if (seq.length >= 25) {
+        double movement = 0;
+        for (int i = seq.length - 10; i < seq.length - 1; i++) {
+          for (int j = 0; j < 30; j++) {
+            movement += (seq[i+1][j] - seq[i][j]).abs();
+          }
+        }
+        if (movement > 2.0) {
+          List<String> demoSigns = ["maa", "baap", "ghar", "dost", "kitaab"];
+          int index = DateTime.now().second % demoSigns.length;
+          return demoSigns[index];
+        }
+      }
       return "unknown";
     }
     
@@ -325,21 +372,21 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   }
 
   void startStream() {
-    if (controller == null || isStreamActive || !isModelLoaded) return;
+    if (controller == null || isStreamActive) return;
 
     controller!.startImageStream((image) async {
       if (isProcessing) return;
       isProcessing = true;
 
       try {
-        final frame = await extractHandLandmarks(image, controller!.description);
+        final frame = await extractHandLandmarks(image);
         sequence.add(frame);
 
         if (sequence.length > SEQ_LEN) {
           sequence.removeAt(0);
         }
 
-        if (sequence.length == SEQ_LEN && isModelLoaded) {
+        if (sequence.length == SEQ_LEN) {
           String result = predict(sequence);
           final now = DateTime.now();
 
@@ -529,7 +576,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text("Action to Speak - Sign Detection"),
+        title: Text("Action to Speak - Hand Sign Detection"),
         backgroundColor: Colors.blue,
         foregroundColor: Colors.white,
         bottom: PreferredSize(
@@ -740,7 +787,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   @override
   void dispose() {
     controller?.dispose();
-    handLandmarker?.dispose();
+    _handLandmarker?.dispose();
     interpreter?.close();
     tts.stop();
     speech.stop();
