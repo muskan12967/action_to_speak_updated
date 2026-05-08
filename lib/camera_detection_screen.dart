@@ -8,7 +8,6 @@ import 'package:hand_landmarker/hand_landmarker.dart';
 import 'dart:math';
 import 'dart:io';
 import 'package:flutter/services.dart' show rootBundle;
-import 'package:image/image.dart' as img;
 
 class CameraDetectionScreen extends StatefulWidget {
   @override
@@ -19,7 +18,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
 
   CameraController? controller;
   Interpreter? interpreter;
-  HandLandmarkerPlugin? handPlugin;
+  HandLandmarker? handLandmarker;
 
   FlutterTts tts = FlutterTts();
   stt.SpeechToText speech = stt.SpeechToText();
@@ -77,20 +76,20 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   @override
   void initState() {
     super.initState();
-    _initHandPlugin();
+    _initHandLandmarker();
     loadModel();
     initTTS();
     initSpeech();
   }
 
-  void _initHandPlugin() {
+  Future<void> _initHandLandmarker() async {
     try {
-      // For hand_landmarker 2.2.0 - different API
-      handPlugin = HandLandmarkerPlugin.create();
-      print("HandLandmarkerPlugin created");
+      // For hand_landmarker 2.2.0 - using the correct API
+      handLandmarker = HandLandmarker();
+      print("✅ HandLandmarker created");
     } catch (e) {
-      print("HandLandmarkerPlugin error: $e");
-      handPlugin = null;
+      print("❌ HandLandmarker error: $e");
+      handLandmarker = null;
     }
   }
 
@@ -115,15 +114,13 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
       interpreter = await Interpreter.fromAsset("assets/model.tflite");
       setState(() {
         isModelLoaded = true;
-        modelStatus = "Model ready!";
+        modelStatus = "✅ Model ready!";
       });
       print("Model loaded!");
-      print("Input  shape: ${interpreter!.getInputTensor(0).shape}");
-      print("Output shape: ${interpreter!.getOutputTensor(0).shape}");
     } catch (e) {
       setState(() {
         isModelLoaded = false;
-        modelStatus = "Error: ${e.toString().substring(0, 40)}";
+        modelStatus = "❌ Error: ${e.toString().substring(0, 40)}";
       });
       print("Error loading model: $e");
       _showModelErrorDialog();
@@ -163,7 +160,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
       );
       await controller!.initialize();
       setState(() {});
-      if (!isStreamActive && isModelLoaded && handPlugin != null) {
+      if (!isStreamActive && isModelLoaded && handLandmarker != null) {
         _startStream();
       }
     } catch (e) {
@@ -173,14 +170,14 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   }
 
   // Convert CameraImage to bytes for hand_landmarker
-  Future<List<int>> convertCameraImageToBytes(CameraImage image) async {
+  Future<Image> convertCameraImageToImage(CameraImage cameraImage) async {
     try {
-      final int width = image.width;
-      final int height = image.height;
+      final int width = cameraImage.width;
+      final int height = cameraImage.height;
       
-      final yPlane = image.planes[0];
-      final uPlane = image.planes[1];
-      final vPlane = image.planes[2];
+      final yPlane = cameraImage.planes[0];
+      final uPlane = cameraImage.planes[1];
+      final vPlane = cameraImage.planes[2];
       
       final List<int> rgbData = List.filled(width * height * 3, 0);
       
@@ -203,16 +200,17 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
         }
       }
       
-      return rgbData;
+      // Convert to Image object
+      return Image.fromBytes(width, height, rgbData);
     } catch (e) {
       print("Convert error: $e");
-      return [];
+      return Image.fromBytes(1, 1, [0, 0, 0]);
     }
   }
 
-  void _startStream() {
+  Future<void> _startStream() async {
     if (controller == null || isStreamActive || !isModelLoaded) return;
-    if (handPlugin == null) {
+    if (handLandmarker == null) {
       _showSnackBar("Hand detector not ready.");
       return;
     }
@@ -224,14 +222,10 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
       isProcessing = true;
 
       try {
-        final bytes = await convertCameraImageToBytes(image);
-        if (bytes.isEmpty) {
-          isProcessing = false;
-          return;
-        }
+        final img = await convertCameraImageToImage(image);
         
-        // For hand_landmarker 2.2.0 - detect from bytes
-        final result = await handPlugin!.detectFromBytes(bytes, image.width, image.height);
+        // For hand_landmarker 2.2.0 - detect from Image
+        final result = await handLandmarker!.detect(img);
         
         if (result != null && result.hands != null) {
           _processHandResult(result.hands!);
@@ -277,7 +271,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
             setState(() => detectedText = prediction);
           }
 
-          print("SIGN DETECTED: $prediction");
+          print("✅ SIGN DETECTED: $prediction");
           tts.speak(prediction);
           _showVideo(prediction);
         }
@@ -317,7 +311,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
         }
       }
 
-      print("${labels[idx]} (${maxVal.toStringAsFixed(3)})");
+      print("🎯 ${labels[idx]} (${maxVal.toStringAsFixed(3)})");
       return maxVal > 0.5 ? labels[idx] : "unknown";
 
     } catch (e) {
@@ -384,7 +378,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
       if (available) {
         setState(() {
           isListening = true;
-          micStatus = "Listening...";
+          micStatus = "🎤 Listening...";
           detectedText = "Listening...";
         });
         speech.listen(
@@ -461,11 +455,11 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text("1. Turn ON camera"),
-            const Text("2. Perform hand sign in front of camera"),
-            const Text("3. App will speak the sign name"),
-            const Text("4. Type Roman Urdu words directly"),
-            const Text("5. Click mic to speak words"),
+            const Text("1. 📷 Turn ON camera"),
+            const Text("2. 🤚 Perform hand sign in front of camera"),
+            const Text("3. 🔊 App will speak the sign name"),
+            const Text("4. ⌨️ Type Roman Urdu words directly"),
+            const Text("5. 🎤 Click mic to speak words"),
             const SizedBox(height: 10),
             const Text("Available signs:",
                 style: TextStyle(fontWeight: FontWeight.bold)),
@@ -686,7 +680,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   @override
   void dispose() {
     controller?.dispose();
-    handPlugin?.dispose();
+    handLandmarker?.close();
     interpreter?.close();
     tts.stop();
     speech.stop();
