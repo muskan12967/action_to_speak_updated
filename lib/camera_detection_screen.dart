@@ -4,11 +4,11 @@ import 'package:flutter_tts/flutter_tts.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 import 'package:tflite_flutter/tflite_flutter.dart';
 import 'package:video_player/video_player.dart';
-import 'package:hand_landmarker/hand_landmarker.dart'; // gives HandLandmarkerPlugin, Hand, Landmark
+import 'package:hand_landmarker/hand_landmarker.dart';
 import 'dart:math';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// pubspec.yaml:
+// pubspec.yaml dependencies:
 //   camera: ^0.11.3
 //   flutter_tts: ^3.8.5
 //   speech_to_text: ^6.6.0
@@ -16,7 +16,7 @@ import 'dart:math';
 //   video_player: ^2.8.1
 //   hand_landmarker: ^2.2.0
 //
-// android/app/build.gradle  →  minSdkVersion 24  (required by hand_landmarker)
+// android/app/build.gradle → minSdkVersion 24
 // ─────────────────────────────────────────────────────────────────────────────
 
 class CameraDetectionScreen extends StatefulWidget {
@@ -26,18 +26,18 @@ class CameraDetectionScreen extends StatefulWidget {
 
 class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
 
-  CameraController? controller;
-  Interpreter?      interpreter;
-  HandLandmarkerPlugin? _plugin; // ← correct class name
+  CameraController?     controller;
+  Interpreter?          interpreter;
+  HandLandmarkerPlugin? _plugin;
 
-  FlutterTts        tts    = FlutterTts();
-  stt.SpeechToText  speech = stt.SpeechToText();
+  FlutterTts       tts    = FlutterTts();
+  stt.SpeechToText speech = stt.SpeechToText();
 
-  bool isCameraOn    = false;
-  bool isProcessing  = false;
-  bool isStreamActive= false;
-  bool isModelLoaded = false;
-  bool isListening   = false;
+  bool isCameraOn     = false;
+  bool isProcessing   = false;
+  bool isStreamActive = false;
+  bool isModelLoaded  = false;
+  bool isListening    = false;
 
   List<List<double>> sequence = [];
 
@@ -48,7 +48,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
 
   DateTime lastTrigger = DateTime.now();
 
-  final int SEQ_LEN          = 25;
+  final int SEQ_LEN           = 25;
   final int FEATURES_PER_FRAME = 126; // 2 hands × 21 landmarks × 3 coords
 
   final TextEditingController textController = TextEditingController();
@@ -96,11 +96,14 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
 
   void _initPlugin() {
     try {
-      // HandLandmarkerPlugin.create() is the correct factory — NOT HandLandmarker()
+      // 2.2.0 API:
+      //   • create() is synchronous (no await)
+      //   • only numHands, minHandDetectionConfidence, delegate are valid params
+      //   • delegate uses lowercase: HandLandmarkerDelegate.cpu / .gpu
       _plugin = HandLandmarkerPlugin.create(
         numHands: 2,
         minHandDetectionConfidence: 0.5,
-        minTrackingConfidence: 0.5,
+        delegate: HandLandmarkerDelegate.cpu,
       );
       print("HandLandmarkerPlugin ready");
     } catch (e) {
@@ -132,8 +135,9 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
         isModelLoaded = true;
         modelStatus   = "Model ready!";
       });
-      print("Model loaded — input:  ${interpreter!.getInputTensor(0).shape}");
-      print("              output: ${interpreter!.getOutputTensor(0).shape}");
+      print("Model loaded!");
+      print("Input  shape: ${interpreter!.getInputTensor(0).shape}");
+      print("Output shape: ${interpreter!.getOutputTensor(0).shape}");
     } catch (e) {
       setState(() {
         isModelLoaded = false;
@@ -166,7 +170,11 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
         (c) => c.lensDirection == CameraLensDirection.front,
         orElse: () => cams.first,
       );
-      controller = CameraController(cam, ResolutionPreset.medium, enableAudio: false);
+      controller = CameraController(
+        cam,
+        ResolutionPreset.medium,
+        enableAudio: false,
+      );
       await controller!.initialize();
       setState(() {});
       if (!isStreamActive && isModelLoaded) _startStream();
@@ -182,16 +190,24 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     if (controller == null || isStreamActive || !isModelLoaded || _plugin == null) return;
     isStreamActive = true;
 
+    // Rotation for front camera (90 degrees on most Android devices)
+    const int rotation = 90;
+
     controller!.startImageStream((CameraImage image) async {
       if (isProcessing) return;
       isProcessing = true;
+
       try {
-        // detect() accepts CameraImage directly — no manual YUV→RGB conversion needed
-        final List<Hand> hands = await _plugin!.detect(image);
+        // 2.2.0: detect() is SYNCHRONOUS — takes (CameraImage, int rotation)
+        // Wrap in Future.microtask so it doesn't block the UI thread
+        final List<Hand> hands = await Future.microtask(
+          () => _plugin!.detect(image, rotation),
+        );
         _processHands(hands);
       } catch (e) {
         print("Stream error: $e");
       }
+
       isProcessing = false;
     });
   }
@@ -203,8 +219,8 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     List<double> hand0 = List.filled(63, 0.0);
     List<double> hand1 = List.filled(63, 0.0);
 
-    if (hands.isNotEmpty)   hand0 = _toFeatures(hands[0]);
-    if (hands.length >= 2)  hand1 = _toFeatures(hands[1]);
+    if (hands.isNotEmpty)  hand0 = _toFeatures(hands[0]);
+    if (hands.length >= 2) hand1 = _toFeatures(hands[1]);
 
     final frame = [...hand0, ...hand1]; // 126 values
     sequence.add(frame);
@@ -219,10 +235,10 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
         if (pred != lastResult &&
             now.difference(lastTrigger).inMilliseconds > 1500 &&
             stability > 0.1) {
-          lastResult   = pred;
-          lastTrigger  = now;
+          lastResult  = pred;
+          lastTrigger = now;
           if (mounted) setState(() => detectedText = pred);
-          print("SIGN: $pred");
+          print("SIGN DETECTED: $pred");
           tts.speak(pred);
           _showVideo(pred);
         }
@@ -230,7 +246,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     }
   }
 
-  // Normalise each landmark relative to the wrist (index 0)
+  // Normalise each landmark relative to wrist (index 0)
   List<double> _toFeatures(Hand hand) {
     final wx = hand.landmarks[0].x;
     final wy = hand.landmarks[0].y;
@@ -314,7 +330,11 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
       setState(() { isListening = false; micStatus = "Mic off"; });
     } else {
       if (await speech.initialize()) {
-        setState(() { isListening = true; micStatus = "Listening..."; detectedText = "Listening..."; });
+        setState(() {
+          isListening = true;
+          micStatus   = "Listening...";
+          detectedText = "Listening...";
+        });
         speech.listen(onResult: (r) {
           final spoken = r.recognizedWords;
           setState(() => detectedText = "Heard: $spoken");
@@ -333,12 +353,13 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
 
   void _showVideo(String key) {
     if (!signMap.containsKey(key)) { _showSnackBar("Video not found: $key"); return; }
-    Navigator.push(context, MaterialPageRoute(builder: (_) => VideoScreen(signMap[key]!, key)));
+    Navigator.push(context,
+        MaterialPageRoute(builder: (_) => VideoScreen(signMap[key]!, key)));
   }
 
   void _showSnackBar(String msg) {
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(msg), duration: const Duration(seconds: 2)));
+        SnackBar(content: Text(msg), duration: const Duration(seconds: 2)));
   }
 
   void clearText() { textController.clear(); setState(() => detectedText = ""); }
@@ -362,7 +383,11 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
               Text("3. flutter clean && flutter pub get"),
             ],
           ),
-          actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text("OK"))],
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text("OK")),
+          ],
         ),
       );
     });
@@ -383,10 +408,17 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
             const Text("4. Type or speak Roman Urdu words"),
             const SizedBox(height: 10),
             const Text("Signs:", style: TextStyle(fontWeight: FontWeight.bold)),
-            Wrap(spacing: 8, children: signMap.keys.map((k) => Chip(label: Text(k))).toList()),
+            Wrap(
+              spacing: 8,
+              children: signMap.keys.map((k) => Chip(label: Text(k))).toList(),
+            ),
           ],
         ),
-        actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text("OK"))],
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text("OK")),
+        ],
       ),
     );
   }
@@ -425,26 +457,28 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
               borderRadius: BorderRadius.circular(10),
               child: isCameraOn && controller != null && controller!.value.isInitialized
                   ? CameraPreview(controller!)
-                  : Center(child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        const Icon(Icons.videocam_off, size: 64, color: Colors.grey),
-                        const SizedBox(height: 10),
-                        const Text("Camera is OFF", style: TextStyle(fontSize: 16)),
-                        const SizedBox(height: 10),
-                        ElevatedButton(
-                          onPressed: toggleCamera,
-                          style: ElevatedButton.styleFrom(backgroundColor: Colors.blue),
-                          child: const Text("Turn ON Camera",
-                              style: TextStyle(color: Colors.white)),
-                        ),
-                      ],
-                    )),
+                  : Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          const Icon(Icons.videocam_off, size: 64, color: Colors.grey),
+                          const SizedBox(height: 10),
+                          const Text("Camera is OFF", style: TextStyle(fontSize: 16)),
+                          const SizedBox(height: 10),
+                          ElevatedButton(
+                            onPressed: toggleCamera,
+                            style: ElevatedButton.styleFrom(backgroundColor: Colors.blue),
+                            child: const Text("Turn ON Camera",
+                                style: TextStyle(color: Colors.white)),
+                          ),
+                        ],
+                      ),
+                    ),
             ),
           ),
         ),
 
-        // Detection result
+        // Detection result banner
         Container(
           margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
           padding: const EdgeInsets.all(12),
@@ -456,18 +490,20 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
           child: Row(children: [
             const Icon(Icons.visibility, color: Colors.blue),
             const SizedBox(width: 10),
-            Expanded(child: Text(
-              detectedText.isEmpty ? "No sign detected yet" : detectedText,
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-                color: detectedText.isEmpty ? Colors.grey : Colors.black,
+            Expanded(
+              child: Text(
+                detectedText.isEmpty ? "No sign detected yet" : detectedText,
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                  color: detectedText.isEmpty ? Colors.grey : Colors.black,
+                ),
               ),
-            )),
+            ),
           ]),
         ),
 
-        // Text input
+        // Text input row
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
           child: Row(children: [
@@ -477,10 +513,13 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
                 focusNode: textFocusNode,
                 decoration: InputDecoration(
                   hintText: "Type Roman Urdu (e.g., baap, dost, ghar)",
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                  border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8)),
                   prefixIcon: const Icon(Icons.keyboard),
                   suffixIcon: textController.text.isNotEmpty
-                      ? IconButton(icon: const Icon(Icons.clear), onPressed: clearText)
+                      ? IconButton(
+                          icon: const Icon(Icons.clear),
+                          onPressed: clearText)
                       : null,
                 ),
                 onSubmitted: (v) { textFocusNode.unfocus(); handleTextInput(v); },
@@ -514,34 +553,47 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
           ),
         ),
 
-        // Buttons
+        // Control buttons
         Padding(
           padding: const EdgeInsets.all(16),
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceEvenly,
             children: [
-              _btn(icon: isCameraOn ? Icons.videocam : Icons.videocam_off,
-                   color: Colors.blue,
-                   label: isCameraOn ? "Camera ON" : "Camera OFF",
-                   onTap: toggleCamera),
+
+              _btn(
+                icon: isCameraOn ? Icons.videocam : Icons.videocam_off,
+                color: Colors.blue,
+                label: isCameraOn ? "Camera ON" : "Camera OFF",
+                onTap: toggleCamera,
+              ),
+
               Stack(
                 alignment: Alignment.topRight,
                 children: [
-                  _btn(icon: isListening ? Icons.mic : Icons.mic_none,
-                       color: isListening ? Colors.red : Colors.grey,
-                       label: micStatus,
-                       onTap: toggleMic),
+                  _btn(
+                    icon: isListening ? Icons.mic : Icons.mic_none,
+                    color: isListening ? Colors.red : Colors.grey,
+                    label: micStatus,
+                    onTap: toggleMic,
+                  ),
                   if (isListening)
-                    Positioned(right: 4, top: 4,
+                    Positioned(
+                      right: 4, top: 4,
                       child: Container(
                         width: 10, height: 10,
                         decoration: const BoxDecoration(
                             color: Colors.red, shape: BoxShape.circle),
-                      )),
+                      ),
+                    ),
                 ],
               ),
-              _btn(icon: Icons.info, color: Colors.orange,
-                   label: "Help", onTap: _showInfoDialog),
+
+              _btn(
+                icon: Icons.info,
+                color: Colors.orange,
+                label: "Help",
+                onTap: _showInfoDialog,
+              ),
             ],
           ),
         ),
@@ -549,8 +601,12 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     );
   }
 
-  Widget _btn({required IconData icon, required Color color,
-               required String label, required VoidCallback onTap}) {
+  Widget _btn({
+    required IconData icon,
+    required Color color,
+    required String label,
+    required VoidCallback onTap,
+  }) {
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -565,7 +621,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   @override
   void dispose() {
     controller?.dispose();
-    _plugin?.dispose();       // correct dispose method
+    _plugin?.dispose();     // synchronous in 2.2.0
     interpreter?.close();
     tts.stop();
     speech.stop();
@@ -591,7 +647,7 @@ class VideoScreen extends StatefulWidget {
 class _VideoScreenState extends State<VideoScreen> {
   late VideoPlayerController controller;
   bool isVideoLoading = true;
-  bool hasError = false;
+  bool hasError       = false;
 
   @override
   void initState() { super.initState(); _loadVideo(); }
@@ -620,50 +676,68 @@ class _VideoScreenState extends State<VideoScreen> {
       backgroundColor: Colors.black,
       body: Center(
         child: isVideoLoading
-            ? const Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-                CircularProgressIndicator(color: Colors.blue),
-                SizedBox(height: 20),
-                Text("Loading video...", style: TextStyle(color: Colors.white)),
-              ])
+            ? const Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  CircularProgressIndicator(color: Colors.blue),
+                  SizedBox(height: 20),
+                  Text("Loading video...",
+                      style: TextStyle(color: Colors.white)),
+                ])
             : hasError
-                ? Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-                    const Icon(Icons.error_outline, color: Colors.red, size: 60),
-                    const SizedBox(height: 20),
-                    const Text("Video not found!", style: TextStyle(color: Colors.white)),
-                    Text("Sign: ${widget.signName}",
-                        style: const TextStyle(color: Colors.white70)),
-                    const SizedBox(height: 20),
-                    ElevatedButton(
-                        onPressed: () => Navigator.pop(context),
-                        child: const Text("Go Back")),
-                  ])
-                : Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-                    AspectRatio(
-                      aspectRatio: controller.value.aspectRatio,
-                      child: VideoPlayer(controller),
-                    ),
-                    const SizedBox(height: 20),
-                    Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-                      IconButton(
-                        icon: Icon(
-                          controller.value.isPlaying ? Icons.pause : Icons.play_arrow,
-                          color: Colors.white, size: 40),
-                        onPressed: () => setState(() {
-                          controller.value.isPlaying
-                              ? controller.pause()
-                              : controller.play();
-                        }),
+                ? Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const Icon(Icons.error_outline, color: Colors.red, size: 60),
+                      const SizedBox(height: 20),
+                      const Text("Video not found!",
+                          style: TextStyle(color: Colors.white)),
+                      Text("Sign: ${widget.signName}",
+                          style: const TextStyle(color: Colors.white70)),
+                      const SizedBox(height: 20),
+                      ElevatedButton(
+                          onPressed: () => Navigator.pop(context),
+                          child: const Text("Go Back")),
+                    ])
+                : Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      AspectRatio(
+                        aspectRatio: controller.value.aspectRatio,
+                        child: VideoPlayer(controller),
                       ),
-                      IconButton(
-                        icon: const Icon(Icons.replay, color: Colors.white, size: 40),
-                        onPressed: () { controller.seekTo(Duration.zero); controller.play(); },
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.close, color: Colors.white, size: 40),
-                        onPressed: () => Navigator.pop(context),
+                      const SizedBox(height: 20),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          IconButton(
+                            icon: Icon(
+                              controller.value.isPlaying
+                                  ? Icons.pause
+                                  : Icons.play_arrow,
+                              color: Colors.white, size: 40),
+                            onPressed: () => setState(() {
+                              controller.value.isPlaying
+                                  ? controller.pause()
+                                  : controller.play();
+                            }),
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.replay,
+                                color: Colors.white, size: 40),
+                            onPressed: () {
+                              controller.seekTo(Duration.zero);
+                              controller.play();
+                            },
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.close,
+                                color: Colors.white, size: 40),
+                            onPressed: () => Navigator.pop(context),
+                          ),
+                        ],
                       ),
                     ]),
-                  ]),
       ),
     );
   }
