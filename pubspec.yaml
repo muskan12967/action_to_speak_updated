@@ -18,7 +18,7 @@ dependencies:
   chewie: ^1.7.5
   image_picker: ^1.0.7
   image: ^4.1.7
-  speech_to_text: ^6.6.0        # ← Updated to compatible version
+  speech_to_text: ^7.0.0        # ← Updated to compatible version
   camera: ^0.11.4               # ← Updated to match hand_landmarker requirement
   flutter_tts: ^3.8.5
   tflite_flutter: ^0.11.0
