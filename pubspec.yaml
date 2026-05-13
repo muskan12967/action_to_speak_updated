@@ -18,14 +18,12 @@ dependencies:
   chewie: ^1.7.5
   image_picker: ^1.0.7
   image: ^4.1.7
-  speech_to_text: ^7.0.0        # ← Updated to compatible version
-  camera: ^0.11.4               # ← Updated to match hand_landmarker requirement
+  speech_to_text: ^6.6.0        # Stable version
+  camera: ^0.10.5               # Compatible with hand_landmarker
   flutter_tts: ^3.8.5
-  tflite_flutter: ^0.11.0
-  hand_landmarker: ^2.2.0
+  tflite_flutter: ^0.10.4       # Stable version
+  hand_landmarker: ^2.1.0       # Compatible version
   google_mlkit_commons: ^0.9.0
-  tflite_flutter_gpu_delegate: ^0.1.0  # Add this
-
 
 dev_dependencies:
   flutter_test:
