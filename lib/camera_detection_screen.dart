@@ -210,9 +210,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     for (var y = 0; y < 224; y++) {
       for (var x = 0; x < 224; x++) {
         final pixelColor = resizedImg.getPixel(x, y);
-        final r = img.getRed(pixelColor) / 255.0;
-        final g = img.getGreen(pixelColor) / 255.0;
-        final b = img.getBlue(pixelColor) / 255.0;
+        final color = img.getColor((r * 255).toInt(), (g * 255).toInt(), (b * 255).toInt());
         floatList[index++] = r;
         floatList[index++] = g;
         floatList[index++] = b;
@@ -222,41 +220,41 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   }
 
   img.Image _convertYUV420toImage(CameraImage image) {
-    final int width = image.width;
-    final int height = image.height;
-    final img.Image imgImage = img.Image(width, height); // Correct constructor
+  final int width = image.width;
+  final int height = image.height;
+  final img.Image imgImage = img.Image(width: width, height: height); // Correct constructor
 
-    final yBuffer = image.planes[0].bytes;
-    final uBuffer = image.planes[1].bytes;
-    final vBuffer = image.planes[2].bytes;
+  final yBuffer = image.planes[0].bytes;
+  final uBuffer = image.planes[1].bytes;
+  final vBuffer = image.planes[2].bytes;
 
-    int uvRowStride = image.planes[1].bytesPerRow;
-    int uvPixelStride = image.planes[1].bytesPerPixel ?? 1;
+  int uvRowStride = image.planes[1].bytesPerRow;
+  int uvPixelStride = image.planes[1].bytesPerPixel ?? 1;
 
-    for (int y = 0; y < height; y++) {
-      for (int x = 0; x < width; x++) {
-        final int yIndex = y * image.planes[0].bytesPerRow + x;
-        final int uvRow = y ~/ 2;
-        final int uvCol = x ~/ 2;
-        final int uIndex = uvRow * uvRowStride + uvCol * uvPixelStride;
-        final int vIndex = uIndex;
+  for (int y = 0; y < height; y++) {
+    for (int x = 0; x < width; x++) {
+      final int yIndex = y * image.planes[0].bytesPerRow + x;
+      final int uvRow = y ~/ 2;
+      final int uvCol = x ~/ 2;
+      final int uIndex = uvRow * uvRowStride + uvCol * uvPixelStride;
+      final int vIndex = uIndex;
 
-        final int yValue = yBuffer[yIndex];
-        final int uValue = uBuffer[uIndex];
-        final int vValue = vBuffer[vIndex];
+      final int yValue = yBuffer[yIndex];
+      final int uValue = uBuffer[uIndex];
+      final int vValue = vBuffer[vIndex];
 
-        final r = (yValue + 1.370705 * (vValue - 128)).clamp(0, 255).toInt();
-        final g = (yValue - 0.337633 * (uValue - 128) - 0.698001 * (vValue - 128))
-            .clamp(0, 255)
-            .toInt();
-        final b = (yValue + 1.732446 * (uValue - 128)).clamp(0, 255).toInt();
+      final r = (yValue + 1.370705 * (vValue - 128)).clamp(0, 255).toInt();
+      final g = (yValue - 0.337633 * (uValue - 128) - 0.698001 * (vValue - 128))
+          .clamp(0, 255)
+          .toInt();
+      final b = (yValue + 1.732446 * (uValue - 128)).clamp(0, 255).toInt();
 
-        final color = img.getColor(r, g, b);
-        imgImage.setPixel(x, y, color);
-      }
+      final color = img.getColor(r, g, b);
+      imgImage.setPixel(x, y, color);
     }
-    return imgImage;
   }
+  return imgImage;
+}
 
   void handleTextInput(String text) {
     final input = text.toLowerCase().trim();
