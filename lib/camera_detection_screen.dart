@@ -439,9 +439,58 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     textFocusNode.dispose();
     super.dispose();
   }
+
+  @override
+  Widget build(BuildContext context) {
+    // Your widget tree here, for example:
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text("Action to Speak"),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.info_outline),
+            onPressed: _showInfoDialog,
+          ),
+        ],
+      ),
+      body: Center(
+        child: Column(
+          children: [
+            // Add your buttons and display here
+            ElevatedButton(
+              onPressed: toggleCamera,
+              child: Text(isCameraOn ? "Stop Camera" : "Start Camera"),
+            ),
+            // Display detected text
+            Text("Detected: $detectedText"),
+            // Mic button
+            ElevatedButton(
+              onPressed: toggleMic,
+              child: Text(micStatus),
+            ),
+            // Text input field
+            Padding(
+              padding: const EdgeInsets.all(8.0),
+              child: TextField(
+                controller: textController,
+                focusNode: textFocusNode,
+                decoration: InputDecoration(
+                  labelText: "Type word",
+                  suffixIcon: IconButton(
+                    icon: const Icon(Icons.send),
+                    onPressed: () => handleTextInput(textController.text),
+                  ),
+                ),
+              ),
+            ),
+            // Add more buttons or UI as needed
+          ],
+        ),
+      ),
+    );
+  }
 }
 
-// VideoScreen class stays the same as before
 class VideoScreen extends StatefulWidget {
   final String path;
   final String signName;
