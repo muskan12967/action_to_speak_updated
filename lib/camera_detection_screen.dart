@@ -238,7 +238,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   img.Image _convertYUV420toImage(CameraImage image) {
     final int width = image.width;
     final int height = image.height;
-    final img.Image imgImage = img.Image(width, height);
+    final imgImage = img.Image(width, height);
     final yBuffer = image.planes[0].bytes;
     final uBuffer = image.planes[1].bytes;
     final vBuffer = image.planes[2].bytes;
