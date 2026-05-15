@@ -115,20 +115,15 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   Future<void> loadModel() async {
     try {
       setState(() => modelStatus = "Loading model...");
-      
-      // Load model with proper options
       interpreter = await Interpreter.fromAsset(
         "assets/model.tflite",
         options: InterpreterOptions()..threads = 2,
       );
-      
       setState(() {
         isModelLoaded = true;
         modelStatus = "Model ready!";
       });
       print("Model loaded successfully!");
-      
-      // Print model input/output details
       if (interpreter != null) {
         print("Input shape: ${interpreter!.getInputTensor(0).shape}");
         print("Output shape: ${interpreter!.getOutputTensor(0).shape}");
@@ -136,7 +131,8 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     } catch (e) {
       setState(() {
         isModelLoaded = false;
-        modelStatus = "Model error: ${e.toString().substring(0, min(40, e.toString().length))}";
+        modelStatus =
+            "Model error: ${e.toString().substring(0, min(40, e.toString().length))}";
       });
       print("Error loading model: $e");
       _showModelErrorDialog();
@@ -169,17 +165,13 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
         (c) => c.lensDirection == CameraLensDirection.front,
         orElse: () => cameras.first,
       );
-      
       controller = CameraController(
         camera,
         ResolutionPreset.medium,
         enableAudio: false,
       );
-      
       await controller!.initialize();
-      
       if (mounted) setState(() {});
-      
       if (!isStreamActive && isModelLoaded && handLandmarker != null) {
         _startStream();
       }
@@ -192,14 +184,13 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
 
   void _startStream() {
     if (controller == null || isStreamActive || !isModelLoaded || handLandmarker == null) return;
-    
     isStreamActive = true;
     const int rotation = 90; // Rotation for front camera
-    
+
     controller!.startImageStream((CameraImage image) async {
       if (isProcessing) return;
       isProcessing = true;
-      
+
       try {
         // Process image for hand detection
         final List<HandLandmark?>? landmarks = await handLandmarker!.detectImage(
@@ -208,48 +199,48 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
           image.height,
           rotation,
         );
-        
+
         if (landmarks != null && landmarks.isNotEmpty) {
           _processLandmarks(landmarks.whereType<HandLandmark>().toList());
         }
       } catch (e) {
         print("Stream error: $e");
       }
-      
+
       isProcessing = false;
     });
   }
 
   void _processLandmarks(List<HandLandmark> landmarks) {
     if (landmarks.isEmpty) return;
-    
+
     // Extract features for up to 2 hands
     List<double> hand0 = List.filled(63, 0.0);
     List<double> hand1 = List.filled(63, 0.0);
-    
+
     if (landmarks.length > 0) {
       hand0 = _toFeatures(landmarks[0]);
     }
     if (landmarks.length > 1) {
       hand1 = _toFeatures(landmarks[1]);
     }
-    
+
     final frame = [...hand0, ...hand1];
     sequence.add(frame);
-    
+
     if (sequence.length > SEQ_LEN) {
       sequence.removeAt(0);
     }
-    
+
     if (sequence.length == SEQ_LEN) {
       final prediction = predict(sequence);
       final now = DateTime.now();
-      
+
       if (prediction != "unknown") {
         if (prediction != lastResult && now.difference(lastTrigger).inMilliseconds > 1500) {
           lastResult = prediction;
           lastTrigger = now;
-          
+
           if (mounted) {
             setState(() => detectedText = prediction);
             tts.speak(prediction);
@@ -262,39 +253,40 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   }
 
   List<double> _toFeatures(HandLandmark landmark) {
+    // Assuming landmark.landmarks is a list of points
     final wrist = landmark.landmarks[0];
     final features = <double>[];
-    
+
     for (final lm in landmark.landmarks) {
       features.add(lm.x - wrist.x);
       features.add(lm.y - wrist.y);
       features.add(lm.z - wrist.z);
     }
-    
+
     return features;
   }
 
   String predict(List<List<double>> seq) {
     if (interpreter == null || !isModelLoaded) return "unknown";
-    
+
     try {
       // Prepare input tensor (batch=1, seq_len=25, features=126)
       final input = [seq];
       final output = List.generate(1, (_) => List.filled(labels.length, 0.0));
-      
+
       interpreter!.run(input, output);
-      
+
       // Find best prediction
       int bestIndex = 0;
       double bestScore = output[0][0];
-      
+
       for (int i = 1; i < labels.length; i++) {
         if (output[0][i] > bestScore) {
           bestScore = output[0][i];
           bestIndex = i;
         }
       }
-      
+
       return bestScore > 0.6 ? labels[bestIndex] : "unknown";
     } catch (e) {
       print("Prediction error: $e");
@@ -308,10 +300,10 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
       _showSnackBar("Please enter some text");
       return;
     }
-    
+
     textController.clear();
     final matched = _findMatch(input);
-    
+
     if (matched != null) {
       setState(() => detectedText = matched);
       tts.speak("یہ $matched کا اشارہ ہے");
@@ -325,15 +317,15 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
 
   String? _findMatch(String input) {
     if (signMap.containsKey(input)) return input;
-    
+
     for (final entry in urduSynonyms.entries) {
       if (entry.value.contains(input)) return entry.key;
     }
-    
+
     for (final key in signMap.keys) {
       if (input.contains(key) || key.contains(input)) return key;
     }
-    
+
     return null;
   }
 
@@ -351,7 +343,8 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
           micStatus = "Listening...";
           detectedText = "Listening...";
         });
-        
+
+        // Remove listenOptions, use supported parameters
         speech.listen(
           onResult: (result) {
             final spoken = result.recognizedWords;
@@ -363,11 +356,8 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
             });
             handleTextInput(spoken);
           },
-          listenOptions: stt.ListenOptions(
-            listenMode: stt.ListenMode.dictation,
-          ),
         );
-        
+
         _showSnackBar("Listening... Speak now");
       } else {
         _showSnackBar("Speech recognition not available");
@@ -380,7 +370,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
       _showSnackBar("Video not found: $key");
       return;
     }
-    
+
     Navigator.push(
       context,
       MaterialPageRoute(
@@ -524,7 +514,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
               ),
             ),
           ),
-          
           // Detection result banner
           Container(
             margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -551,7 +540,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
               ],
             ),
           ),
-          
           // Text input row
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
@@ -595,7 +583,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
               ],
             ),
           ),
-          
           // Quick chips
           SizedBox(
             height: 50,
@@ -612,7 +599,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
               )).toList(),
             ),
           ),
-          
           // Control buttons
           Padding(
             padding: const EdgeInsets.all(16),
