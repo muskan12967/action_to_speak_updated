@@ -35,7 +35,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   DateTime lastTrigger = DateTime.now();
 
   final int SEQ_LEN = 25;
-  final int FEATURES_PER_FRAME = 126;
 
   final TextEditingController textController = TextEditingController();
   final FocusNode textFocusNode = FocusNode();
@@ -124,10 +123,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
         modelStatus = "Model ready!";
       });
       print("Model loaded successfully!");
-      if (interpreter != null) {
-        print("Input shape: ${interpreter!.getInputTensor(0).shape}");
-        print("Output shape: ${interpreter!.getOutputTensor(0).shape}");
-      }
     } catch (e) {
       setState(() {
         isModelLoaded = false;
@@ -193,7 +188,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
 
       try {
         // Process image for hand detection
-        final List<HandLandmark?>? landmarks = await handLandmarker!.detectImage(
+        final List<dynamic>? landmarks = await handLandmarker!.detectImage(
           image.planes[0].bytes,
           image.width,
           image.height,
@@ -201,7 +196,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
         );
 
         if (landmarks != null && landmarks.isNotEmpty) {
-          _processLandmarks(landmarks.whereType<HandLandmark>().toList());
+          _processLandmarks(landmarks);
         }
       } catch (e) {
         print("Stream error: $e");
@@ -211,7 +206,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     });
   }
 
-  void _processLandmarks(List<HandLandmark> landmarks) {
+  void _processLandmarks(List<dynamic> landmarks) {
     if (landmarks.isEmpty) return;
 
     // Extract features for up to 2 hands
@@ -252,17 +247,19 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     }
   }
 
-  List<double> _toFeatures(HandLandmark landmark) {
-    // Assuming landmark.landmarks is a list of points
-    final wrist = landmark.landmarks[0];
+  List<double> _toFeatures(dynamic landmark) {
+    // Assuming landmark has 'landmarks' as list of points
+    // Each point has 'x', 'y', 'z'
+    // landmark.landmarks is a list of points
+    final List<dynamic> points = landmark.landmarks;
+    final wrist = points[0];
     final features = <double>[];
 
-    for (final lm in landmark.landmarks) {
+    for (final lm in points) {
       features.add(lm.x - wrist.x);
       features.add(lm.y - wrist.y);
       features.add(lm.z - wrist.z);
     }
-
     return features;
   }
 
@@ -343,8 +340,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
           micStatus = "Listening...";
           detectedText = "Listening...";
         });
-
-        // Remove listenOptions, use supported parameters
         speech.listen(
           onResult: (result) {
             final spoken = result.recognizedWords;
@@ -357,7 +352,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
             handleTextInput(spoken);
           },
         );
-
         _showSnackBar("Listening... Speak now");
       } else {
         _showSnackBar("Speech recognition not available");
