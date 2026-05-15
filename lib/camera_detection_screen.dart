@@ -4,9 +4,9 @@ import 'package:flutter_tts/flutter_tts.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 import 'package:tflite_flutter/tflite_flutter.dart';
 import 'package:video_player/video_player.dart';
-import 'package:hand_landmarker/hand_landmarker.dart';
 import 'dart:math';
 import 'dart:typed_data';
+import 'package:image/image.dart' as img; // For image processing
 
 class CameraDetectionScreen extends StatefulWidget {
   @override
@@ -16,7 +16,8 @@ class CameraDetectionScreen extends StatefulWidget {
 class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   CameraController? controller;
   Interpreter? interpreter;
-  HandLandmarker? handLandmarker;
+  // Remove handLandmarker
+  // HandLandmarker? handLandmarker;
 
   FlutterTts tts = FlutterTts();
   stt.SpeechToText speech = stt.SpeechToText();
@@ -71,27 +72,9 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   @override
   void initState() {
     super.initState();
-    initHandLandmarker();
-    loadModel();
     initTTS();
     initSpeech();
-  }
-
-  Future<void> initHandLandmarker() async {
-    try {
-      handLandmarker = await HandLandmarker.initialize(
-        numHands: 2,
-        minHandDetectionConfidence: 0.5,
-        minHandTrackingConfidence: 0.5,
-        delegate: HandLandmarkerDelegate.cpu,
-      );
-      print("HandLandmarker initialized successfully");
-    } catch (e) {
-      print("HandLandmarker init error: $e");
-      setState(() {
-        modelStatus = "HandLandmarker error";
-      });
-    }
+    loadModel();
   }
 
   Future<void> initTTS() async {
@@ -167,7 +150,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
       );
       await controller!.initialize();
       if (mounted) setState(() {});
-      if (!isStreamActive && isModelLoaded && handLandmarker != null) {
+      if (!isStreamActive && isModelLoaded) {
         _startStream();
       }
     } catch (e) {
@@ -178,117 +161,113 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   }
 
   void _startStream() {
-    if (controller == null || isStreamActive || !isModelLoaded || handLandmarker == null) return;
+    if (controller == null || isStreamActive || !isModelLoaded) return;
     isStreamActive = true;
-    const int rotation = 90; // Rotation for front camera
+    const int rotation = 90; // for front camera
 
     controller!.startImageStream((CameraImage image) async {
       if (isProcessing) return;
       isProcessing = true;
 
       try {
-        // Process image for hand detection
-        final List<dynamic>? landmarks = await handLandmarker!.detectImage(
-          image.planes[0].bytes,
-          image.width,
-          image.height,
-          rotation,
-        );
+        // Preprocess camera image to match your model input
+        final input = preprocessCameraImage(image);
 
-        if (landmarks != null && landmarks.isNotEmpty) {
-          _processLandmarks(landmarks);
+        // Prepare output buffer
+        final output = List.filled(1 * labels.length, 0.0).reshape([1, labels.length]);
+
+        // Run inference
+        interpreter!.run([input], output);
+
+        // Find max score
+        int maxIdx = 0;
+        double maxScore = output[0][0];
+        for (int i = 1; i < labels.length; i++) {
+          if (output[0][i] > maxScore) {
+            maxScore = output[0][i];
+            maxIdx = i;
+          }
+        }
+
+        final prediction = maxScore > 0.6 ? labels[maxIdx] : "unknown";
+
+        if (prediction != "unknown") {
+          final now = DateTime.now();
+          if (prediction != lastResult && now.difference(lastTrigger).inMilliseconds > 1500) {
+            lastResult = prediction;
+            lastTrigger = now;
+            if (mounted) {
+              setState(() => detectedText = prediction);
+              tts.speak(prediction);
+              _showVideo(prediction);
+              print("SIGN DETECTED: $prediction");
+            }
+          }
         }
       } catch (e) {
-        print("Stream error: $e");
+        print("Inference error: $e");
       }
-
       isProcessing = false;
     });
   }
 
-  void _processLandmarks(List<dynamic> landmarks) {
-    if (landmarks.isEmpty) return;
+  // Function to convert CameraImage to Float32List suitable for model input
+  Float32List preprocessCameraImage(CameraImage image) {
+    // Resize the image to 224x224 and normalize
+    final img.Image convertedImage = _convertYUV420toImage(image);
+    final resizedImg = img.copyResize(convertedImage, width: 224, height: 224);
 
-    // Extract features for up to 2 hands
-    List<double> hand0 = List.filled(63, 0.0);
-    List<double> hand1 = List.filled(63, 0.0);
-
-    if (landmarks.length > 0) {
-      hand0 = _toFeatures(landmarks[0]);
-    }
-    if (landmarks.length > 1) {
-      hand1 = _toFeatures(landmarks[1]);
-    }
-
-    final frame = [...hand0, ...hand1];
-    sequence.add(frame);
-
-    if (sequence.length > SEQ_LEN) {
-      sequence.removeAt(0);
-    }
-
-    if (sequence.length == SEQ_LEN) {
-      final prediction = predict(sequence);
-      final now = DateTime.now();
-
-      if (prediction != "unknown") {
-        if (prediction != lastResult && now.difference(lastTrigger).inMilliseconds > 1500) {
-          lastResult = prediction;
-          lastTrigger = now;
-
-          if (mounted) {
-            setState(() => detectedText = prediction);
-            tts.speak(prediction);
-            _showVideo(prediction);
-            print("SIGN DETECTED: $prediction");
-          }
-        }
+    final floatList = Float32List(224 * 224 * 3);
+    int index = 0;
+    for (var y = 0; y < 224; y++) {
+      for (var x = 0; x < 224; x++) {
+        final pixel = resizedImg.getPixel(x, y);
+        final r = img.getRed(pixel) / 255.0;
+        final g = img.getGreen(pixel) / 255.0;
+        final b = img.getBlue(pixel) / 255.0;
+        floatList[index++] = r;
+        floatList[index++] = g;
+        floatList[index++] = b;
       }
     }
+    return floatList;
   }
 
-  List<double> _toFeatures(dynamic landmark) {
-    // Assuming landmark has 'landmarks' as list of points
-    // Each point has 'x', 'y', 'z'
-    // landmark.landmarks is a list of points
-    final List<dynamic> points = landmark.landmarks;
-    final wrist = points[0];
-    final features = <double>[];
+  // Helper to convert YUV420 to RGB Image
+  img.Image _convertYUV420toImage(CameraImage image) {
+    final int width = image.width;
+    final int height = image.height;
+    final img.Image imgImage = img.Image(width, height);
+    final yBuffer = image.planes[0].bytes;
+    final uBuffer = image.planes[1].bytes;
+    final vBuffer = image.planes[2].bytes;
 
-    for (final lm in points) {
-      features.add(lm.x - wrist.x);
-      features.add(lm.y - wrist.y);
-      features.add(lm.z - wrist.z);
-    }
-    return features;
-  }
+    int uvRowStride = image.planes[1].bytesPerRow;
+    int uvPixelStride = image.planes[1].bytesPerPixel ?? 1;
 
-  String predict(List<List<double>> seq) {
-    if (interpreter == null || !isModelLoaded) return "unknown";
+    for (int y = 0; y < height; y++) {
+      for (int x = 0; x < width; x++) {
+        final int yIndex = y * image.planes[0].bytesPerRow + x;
+        final int uvRow = y ~/ 2;
+        final int uvCol = x ~/ 2;
+        final int uIndex = uvRow * uvRowStride + uvCol * uvPixelStride;
+        final int vIndex = uIndex;
 
-    try {
-      // Prepare input tensor (batch=1, seq_len=25, features=126)
-      final input = [seq];
-      final output = List.generate(1, (_) => List.filled(labels.length, 0.0));
+        final int yValue = yBuffer[yIndex];
+        final int uValue = uBuffer[uIndex];
+        final int vValue = vBuffer[vIndex];
 
-      interpreter!.run(input, output);
+        final r = (yValue + 1.370705 * (vValue - 128)).clamp(0, 255).toInt();
+        final g = (yValue - 0.337633 * (uValue - 128) - 0.698001 * (vValue - 128))
+            .clamp(0, 255)
+            .toInt();
+        final b = (yValue + 1.732446 * (uValue - 128)).clamp(0, 255).toInt();
 
-      // Find best prediction
-      int bestIndex = 0;
-      double bestScore = output[0][0];
-
-      for (int i = 1; i < labels.length; i++) {
-        if (output[0][i] > bestScore) {
-          bestScore = output[0][i];
-          bestIndex = i;
-        }
+        final color = img.getColor(r, g, b);
+        imgImage.setPixel(x, y, color);
       }
-
-      return bestScore > 0.6 ? labels[bestIndex] : "unknown";
-    } catch (e) {
-      print("Prediction error: $e");
-      return "unknown";
     }
+    return imgImage;
   }
 
   void handleTextInput(String text) {
@@ -664,7 +643,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   @override
   void dispose() {
     controller?.dispose();
-    handLandmarker?.close();
+    // No handLandmarker to close
     interpreter?.close();
     tts.stop();
     speech.stop();
