@@ -21,7 +21,7 @@ dependencies:
   speech_to_text: ^6.6.2      # Stable version
   camera: ^0.11.4              # Compatible with hand_landmarker
   flutter_tts: ^3.8.5
-  tflite_flutter: ^0.10.4       # Stable version
+  tflite_flutter: ^0.12.0       # Stable version
   hand_landmarker: ^2.2.0       # Compatible version
   google_mlkit_commons: ^0.9.0
       
