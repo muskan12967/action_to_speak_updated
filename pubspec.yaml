@@ -24,7 +24,7 @@ dependencies:
   tflite_flutter: ^0.10.4       # Stable version
   hand_landmarker: ^2.2.0       # Compatible version
   google_mlkit_commons: ^0.9.0
-  hand_tracking: ^latest_version
+  hand_tracking: ^1.2.3
       
 dev_dependencies:
   flutter_test:
