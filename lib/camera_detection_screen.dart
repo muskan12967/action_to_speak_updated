@@ -16,8 +16,6 @@ class CameraDetectionScreen extends StatefulWidget {
 class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   CameraController? controller;
   Interpreter? interpreter;
-  // Remove handLandmarker
-  // HandLandmarker? handLandmarker;
 
   FlutterTts tts = FlutterTts();
   stt.SpeechToText speech = stt.SpeechToText();
@@ -163,23 +161,16 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   void _startStream() {
     if (controller == null || isStreamActive || !isModelLoaded) return;
     isStreamActive = true;
-    const int rotation = 90; // for front camera
-
     controller!.startImageStream((CameraImage image) async {
       if (isProcessing) return;
       isProcessing = true;
 
       try {
-        // Preprocess camera image to match your model input
         final input = preprocessCameraImage(image);
-
-        // Prepare output buffer
         final output = List.filled(1 * labels.length, 0.0).reshape([1, labels.length]);
 
-        // Run inference
         interpreter!.run([input], output);
 
-        // Find max score
         int maxIdx = 0;
         double maxScore = output[0][0];
         for (int i = 1; i < labels.length; i++) {
@@ -211,17 +202,13 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     });
   }
 
-  // Function to convert CameraImage to Float32List suitable for model input
   Float32List preprocessCameraImage(CameraImage image) {
-    // Resize the image to 224x224 and normalize
-    final img.Image convertedImage = _convertYUV420toImage(image);
+    final convertedImage = _convertYUV420toImage(image);
     final resizedImg = img.copyResize(convertedImage, width: 224, height: 224);
-
     final floatList = Float32List(224 * 224 * 3);
     int index = 0;
     for (var y = 0; y < 224; y++) {
       for (var x = 0; x < 224; x++) {
-        final pixel = resizedImg.getPixel(x, y);
         final pixelColor = resizedImg.getPixel(x, y);
         final r = img.getRed(pixelColor) / 255.0;
         final g = img.getGreen(pixelColor) / 255.0;
@@ -234,11 +221,11 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     return floatList;
   }
 
-  // Helper to convert YUV420 to RGB Image
   img.Image _convertYUV420toImage(CameraImage image) {
     final int width = image.width;
     final int height = image.height;
-    final imgImage = img.Image(width, height);
+    final img.Image imgImage = img.Image(width, height); // Correct constructor
+
     final yBuffer = image.planes[0].bytes;
     final uBuffer = image.planes[1].bytes;
     final vBuffer = image.planes[2].bytes;
@@ -277,10 +264,8 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
       _showSnackBar("Please enter some text");
       return;
     }
-
     textController.clear();
     final matched = _findMatch(input);
-
     if (matched != null) {
       setState(() => detectedText = matched);
       tts.speak("یہ $matched کا اشارہ ہے");
@@ -294,15 +279,12 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
 
   String? _findMatch(String input) {
     if (signMap.containsKey(input)) return input;
-
     for (final entry in urduSynonyms.entries) {
       if (entry.value.contains(input)) return entry.key;
     }
-
     for (final key in signMap.keys) {
       if (input.contains(key) || key.contains(input)) return key;
     }
-
     return null;
   }
 
@@ -344,7 +326,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
       _showSnackBar("Video not found: $key");
       return;
     }
-
     Navigator.push(
       context,
       MaterialPageRoute(
@@ -430,199 +411,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     );
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text("Action to Speak - Sign Detection"),
-        backgroundColor: Colors.blue,
-        foregroundColor: Colors.white,
-        bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(28),
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-            alignment: Alignment.centerLeft,
-            child: Text(
-              modelStatus,
-              style: const TextStyle(fontSize: 12, color: Colors.white70),
-            ),
-          ),
-        ),
-      ),
-      body: Column(
-        children: [
-          // Camera preview
-          Expanded(
-            flex: 2,
-            child: Container(
-              margin: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                border: Border.all(color: Colors.blue, width: 2),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(10),
-                child: isCameraOn && controller != null && controller!.value.isInitialized
-                    ? CameraPreview(controller!)
-                    : Center(
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            const Icon(Icons.videocam_off, size: 64, color: Colors.grey),
-                            const SizedBox(height: 10),
-                            const Text("Camera is OFF", style: TextStyle(fontSize: 16)),
-                            const SizedBox(height: 10),
-                            ElevatedButton(
-                              onPressed: toggleCamera,
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: Colors.blue,
-                              ),
-                              child: const Text(
-                                "Turn ON Camera",
-                                style: TextStyle(color: Colors.white),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-              ),
-            ),
-          ),
-          // Detection result banner
-          Container(
-            margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: Colors.blue.shade50,
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: Colors.blue.shade200),
-            ),
-            child: Row(
-              children: [
-                const Icon(Icons.visibility, color: Colors.blue),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    detectedText.isEmpty ? "No sign detected yet" : detectedText,
-                    style: TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                      color: detectedText.isEmpty ? Colors.grey : Colors.black,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          // Text input row
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-            child: Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: textController,
-                    focusNode: textFocusNode,
-                    decoration: InputDecoration(
-                      hintText: "Type Roman Urdu (e.g., baap, dost, ghar)",
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      prefixIcon: const Icon(Icons.keyboard),
-                      suffixIcon: textController.text.isNotEmpty
-                          ? IconButton(
-                              icon: const Icon(Icons.clear),
-                              onPressed: clearText,
-                            )
-                          : null,
-                    ),
-                    onSubmitted: (v) {
-                      textFocusNode.unfocus();
-                      handleTextInput(v);
-                    },
-                  ),
-                ),
-                const SizedBox(width: 8),
-                ElevatedButton(
-                  onPressed: () {
-                    textFocusNode.unfocus();
-                    handleTextInput(textController.text);
-                  },
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.green,
-                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-                  ),
-                  child: const Icon(Icons.send, color: Colors.white),
-                ),
-              ],
-            ),
-          ),
-          // Quick chips
-          SizedBox(
-            height: 50,
-            child: ListView(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-              children: signMap.keys.map((key) => Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 4),
-                child: ActionChip(
-                  label: Text(key),
-                  onPressed: () => handleTextInput(key),
-                  backgroundColor: Colors.blue.shade100,
-                ),
-              )).toList(),
-            ),
-          ),
-          // Control buttons
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-              children: [
-                _btn(
-                  icon: isCameraOn ? Icons.videocam : Icons.videocam_off,
-                  color: Colors.blue,
-                  label: isCameraOn ? "Camera ON" : "Camera OFF",
-                  onTap: toggleCamera,
-                ),
-                Stack(
-                  alignment: Alignment.topRight,
-                  children: [
-                    _btn(
-                      icon: isListening ? Icons.mic : Icons.mic_none,
-                      color: isListening ? Colors.red : Colors.grey,
-                      label: micStatus,
-                      onTap: toggleMic,
-                    ),
-                    if (isListening)
-                      Positioned(
-                        right: 4,
-                        top: 4,
-                        child: Container(
-                          width: 10,
-                          height: 10,
-                          decoration: const BoxDecoration(
-                            color: Colors.red,
-                            shape: BoxShape.circle,
-                          ),
-                        ),
-                      ),
-                  ],
-                ),
-                _btn(
-                  icon: Icons.info,
-                  color: Colors.orange,
-                  label: "Help",
-                  onTap: _showInfoDialog,
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
   Widget _btn({
     required IconData icon,
     required Color color,
@@ -644,7 +432,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   @override
   void dispose() {
     controller?.dispose();
-    // No handLandmarker to close
     interpreter?.close();
     tts.stop();
     speech.stop();
@@ -654,7 +441,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   }
 }
 
-// VideoScreen stays the same as before
+// VideoScreen class stays the same as before
 class VideoScreen extends StatefulWidget {
   final String path;
   final String signName;
