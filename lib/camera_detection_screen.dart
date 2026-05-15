@@ -222,9 +222,10 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     for (var y = 0; y < 224; y++) {
       for (var x = 0; x < 224; x++) {
         final pixel = resizedImg.getPixel(x, y);
-        final r = img.getRed(pixel) / 255.0;
-        final g = img.getGreen(pixel) / 255.0;
-        final b = img.getBlue(pixel) / 255.0;
+        final pixelColor = resizedImg.getPixel(x, y);
+        final r = img.getRed(pixelColor) / 255.0;
+        final g = img.getGreen(pixelColor) / 255.0;
+        final b = img.getBlue(pixelColor) / 255.0;
         floatList[index++] = r;
         floatList[index++] = g;
         floatList[index++] = b;
