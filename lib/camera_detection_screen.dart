@@ -219,7 +219,9 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     return floatList;
   }
 
-  img.Image _convertYUV420toImage(CameraImage image) {
+ import 'package:image/image.dart' as img;
+
+img.Image _convertYUV420toImage(CameraImage image) {
   final int width = image.width;
   final int height = image.height;
   final img.Image imgImage = img.Image(width: width, height: height); // Correct constructor
@@ -243,13 +245,13 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
       final int uValue = uBuffer[uIndex];
       final int vValue = vBuffer[vIndex];
 
-      final r = (yValue + 1.370705 * (vValue - 128)).clamp(0, 255).toInt();
-      final g = (yValue - 0.337633 * (uValue - 128) - 0.698001 * (vValue - 128))
+      final rVal = (yValue + 1.370705 * (vValue - 128)).clamp(0, 255).toInt();
+      final gVal = (yValue - 0.337633 * (uValue - 128) - 0.698001 * (vValue - 128))
           .clamp(0, 255)
           .toInt();
-      final b = (yValue + 1.732446 * (uValue - 128)).clamp(0, 255).toInt();
+      final bVal = (yValue + 1.732446 * (uValue - 128)).clamp(0, 255).toInt();
 
-      final color = img.getColor(r, g, b);
+      final color = img.getColor(rVal, gVal, bVal);
       imgImage.setPixel(x, y, color);
     }
   }
