@@ -1,10 +1,12 @@
 name: Build Flutter APK
+
 on:
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
 
@@ -23,17 +25,35 @@ jobs:
       - name: Create Android project files
         run: flutter create --platforms=android .
 
+      - name: Force correct speech_to_text version
+        run: |
+          # Delete lock file so Flutter resolves versions fresh from pubspec.yaml
+          rm -f pubspec.lock
+          # Force exact version — remove any existing speech_to_text line and replace
+          sed -i '/speech_to_text/d' pubspec.yaml
+          sed -i '/flutter_tts/a\  speech_to_text: 6.3.0' pubspec.yaml
+          echo "--- speech_to_text in pubspec.yaml ---"
+          grep speech_to_text pubspec.yaml
+
       - name: Get packages
         run: flutter pub get
 
-      - name: Fix minSdkVersion
+      - name: Verify speech_to_text version
+        run: |
+          echo "--- Resolved version in pubspec.lock ---"
+          grep -A2 "speech_to_text" pubspec.lock
+
+      - name: Fix Android build settings
         run: |
           if [ -f "android/app/build.gradle" ]; then
-            sed -i 's/minSdkVersion .*/minSdkVersion 21/g' android/app/build.gradle
+            # hand_landmarker requires minSdkVersion 24, NOT 21
+            sed -i 's/minSdkVersion .*/minSdkVersion 24/g' android/app/build.gradle
             sed -i 's/targetSdkVersion .*/targetSdkVersion 34/g' android/app/build.gradle
-            echo "✅ Fixed build.gradle"
+            echo "--- build.gradle after fix ---"
+            grep -E "minSdkVersion|targetSdkVersion" android/app/build.gradle
           else
-            echo "⚠️ build.gradle not found, creating default"
+            echo "build.gradle not found"
+            exit 1
           fi
 
       - name: Build APK
