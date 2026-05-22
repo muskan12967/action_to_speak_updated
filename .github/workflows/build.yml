@@ -22,14 +22,9 @@ jobs:
           flutter-version: '3.41.9'
           channel: 'stable'
 
-      - name: Create Android project files
-        run: flutter create --platforms=android .
-
       - name: Force correct speech_to_text version
         run: |
-          # Delete lock file so Flutter resolves versions fresh from pubspec.yaml
           rm -f pubspec.lock
-          # Force exact version — remove any existing speech_to_text line and replace
           sed -i '/speech_to_text/d' pubspec.yaml
           sed -i '/flutter_tts/a\  speech_to_text: 6.3.0' pubspec.yaml
           echo "--- speech_to_text in pubspec.yaml ---"
@@ -38,21 +33,26 @@ jobs:
       - name: Get packages
         run: flutter pub get
 
-      - name: Verify speech_to_text version
+      - name: Create Android project files
         run: |
-          echo "--- Resolved version in pubspec.lock ---"
-          grep -A2 "speech_to_text" pubspec.lock
+          flutter create --platforms=android .
+          echo "--- Listing android/app/ ---"
+          ls android/app/
 
       - name: Fix Android build settings
         run: |
-          if [ -f "android/app/build.gradle" ]; then
-            # hand_landmarker requires minSdkVersion 24, NOT 21
-            sed -i 's/minSdkVersion .*/minSdkVersion 24/g' android/app/build.gradle
-            sed -i 's/targetSdkVersion .*/targetSdkVersion 34/g' android/app/build.gradle
-            echo "--- build.gradle after fix ---"
-            grep -E "minSdkVersion|targetSdkVersion" android/app/build.gradle
+          BUILD_GRADLE="android/app/build.gradle"
+          if [ -f "$BUILD_GRADLE" ]; then
+            sed -i 's/minSdkVersion .*/minSdkVersion 24/g' "$BUILD_GRADLE"
+            sed -i 's/targetSdkVersion .*/targetSdkVersion 34/g' "$BUILD_GRADLE"
+            # Also handle flutter.minSdkVersion style
+            sed -i 's/minSdkVersion flutter\.minSdkVersion/minSdkVersion 24/g' "$BUILD_GRADLE"
+            echo "--- SDK versions in build.gradle ---"
+            grep -E "minSdkVersion|targetSdkVersion|compileSdkVersion" "$BUILD_GRADLE"
           else
-            echo "build.gradle not found"
+            echo "build.gradle still not found after flutter create"
+            echo "--- Contents of android/ ---"
+            find android/ -name "*.gradle" 2>/dev/null || echo "No gradle files found"
             exit 1
           fi
 
