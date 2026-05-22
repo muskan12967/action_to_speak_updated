@@ -22,11 +22,12 @@ jobs:
           flutter-version: '3.41.9'
           channel: 'stable'
 
-      - name: Force correct speech_to_text version
+      - name: Fix speech_to_text version
         run: |
           rm -f pubspec.lock
           sed -i '/speech_to_text/d' pubspec.yaml
-          sed -i '/flutter_tts/a\  speech_to_text: 6.3.0' pubspec.yaml
+          sed -i '/flutter_tts/a\  speech_to_text: 6.5.0' pubspec.yaml
+          echo "--- pubspec speech_to_text ---"
           grep speech_to_text pubspec.yaml
 
       - name: Get packages
@@ -49,15 +50,13 @@ jobs:
           print("=== BEFORE ===")
           print(content)
 
-          # Replace minSdk = flutter.minSdkVersion  →  minSdk = 24
+          # Set minSdk, targetSdk, compileSdk
           content = re.sub(r'minSdk\s*=\s*flutter\.minSdkVersion', 'minSdk = 24', content)
-          # Replace targetSdk = flutter.targetSdkVersion  →  targetSdk = 34
-          content = re.sub(r'targetSdk\s*=\s*flutter\.targetSdkVersion', 'targetSdk = 34', content)
-          # Replace compileSdk = flutter.compileSdkVersion  →  compileSdk = 34
-          content = re.sub(r'compileSdk\s*=\s*flutter\.compileSdkVersion', 'compileSdk = 34', content)
-          # Replace any plain numbers too just in case
           content = re.sub(r'minSdk\s*=\s*\d+', 'minSdk = 24', content)
-          content = re.sub(r'targetSdk\s*=\s*\d+', 'targetSdk = 34', content)
+          content = re.sub(r'targetSdk\s*=\s*flutter\.targetSdkVersion', 'targetSdk = 36', content)
+          content = re.sub(r'targetSdk\s*=\s*\d+', 'targetSdk = 36', content)
+          content = re.sub(r'compileSdk\s*=\s*flutter\.compileSdkVersion', 'compileSdk = 36', content)
+          content = re.sub(r'compileSdk\s*=\s*\d+', 'compileSdk = 36', content)
 
           print("=== AFTER ===")
           print(content)
@@ -72,7 +71,7 @@ jobs:
         run: |
           MANIFEST="android/app/src/main/AndroidManifest.xml"
           sed -i 's|<application|<uses-permission android:name="android.permission.CAMERA"/>\n    <uses-permission android:name="android.permission.RECORD_AUDIO"/>\n    <uses-permission android:name="android.permission.INTERNET"/>\n    <application|g' "$MANIFEST"
-          echo "--- Permissions added ---"
+          echo "--- Permissions ---"
           grep "uses-permission" "$MANIFEST"
 
       - name: Build APK
