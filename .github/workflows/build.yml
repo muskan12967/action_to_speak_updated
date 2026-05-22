@@ -33,39 +33,45 @@ jobs:
       - name: Get packages
         run: flutter pub get
 
-      - name: Setup Android directory
+      - name: Regenerate Android folder
         run: |
-          # Remove any broken android folder and regenerate cleanly
           rm -rf android/
           flutter create --platforms=android .
-          echo "--- Gradle files found ---"
-          find . -name "*.gradle" | grep -v ".dart_tool"
+          echo "--- All gradle files ---"
+          find . -name "*.gradle" -o -name "*.gradle.kts" | grep -v ".dart_tool"
 
-      - name: Fix Android build settings
+      - name: Fix minSdkVersion
         run: |
-          # Find build.gradle wherever it is
-          BUILD_GRADLE=$(find android/ -name "build.gradle" | grep "app/build.gradle" | head -1)
+          # Flutter 3.41.9 generates build.gradle.kts (Kotlin DSL)
+          BUILD_GRADLE="android/app/build.gradle.kts"
           
-          if [ -z "$BUILD_GRADLE" ]; then
-            # Try kotlin dsl
-            BUILD_GRADLE=$(find android/ -name "build.gradle.kts" | grep "app" | head -1)
+          if [ ! -f "$BUILD_GRADLE" ]; then
+            # fallback to groovy DSL
+            BUILD_GRADLE="android/app/build.gradle"
           fi
           
-          echo "Found: $BUILD_GRADLE"
+          echo "Using: $BUILD_GRADLE"
+          echo "--- Before fix ---"
+          cat "$BUILD_GRADLE"
           
-          if [ -n "$BUILD_GRADLE" ]; then
-            sed -i 's/minSdkVersion flutter\.minSdkVersion/minSdkVersion 24/g' "$BUILD_GRADLE"
-            sed -i 's/minSdkVersion [0-9]*/minSdkVersion 24/g' "$BUILD_GRADLE"
-            sed -i 's/targetSdkVersion [0-9]*/targetSdkVersion 34/g' "$BUILD_GRADLE"
-            echo "--- SDK versions ---"
-            grep -E "minSdk|targetSdk|compileSdk" "$BUILD_GRADLE"
-          else
-            echo "--- All gradle files ---"
-            find android/ -name "*.gradle*"
-            echo "--- android/app/ contents ---"
-            ls -la android/app/ 2>/dev/null || echo "android/app/ missing"
-            exit 1
-          fi
+          # Fix minSdk — Kotlin DSL uses minSdk not minSdkVersion
+          sed -i 's/minSdk = flutter\.minSdkVersion/minSdk = 24/g' "$BUILD_GRADLE"
+          sed -i 's/minSdk = [0-9]*/minSdk = 24/g' "$BUILD_GRADLE"
+          sed -i 's/minSdkVersion flutter\.minSdkVersion/minSdkVersion 24/g' "$BUILD_GRADLE"
+          sed -i 's/minSdkVersion [0-9]*/minSdkVersion 24/g' "$BUILD_GRADLE"
+          sed -i 's/targetSdk = [0-9]*/targetSdk = 34/g' "$BUILD_GRADLE"
+          sed -i 's/targetSdkVersion [0-9]*/targetSdkVersion 34/g' "$BUILD_GRADLE"
+          
+          echo "--- After fix ---"
+          grep -E "minSdk|targetSdk|compileSdk" "$BUILD_GRADLE"
+
+      - name: Add camera and mic permissions to AndroidManifest
+        run: |
+          MANIFEST="android/app/src/main/AndroidManifest.xml"
+          # Insert permissions before <application tag
+          sed -i 's|<application|<uses-permission android:name="android.permission.CAMERA"/>\n    <uses-permission android:name="android.permission.RECORD_AUDIO"/>\n    <uses-permission android:name="android.permission.INTERNET"/>\n    <application|g' "$MANIFEST"
+          echo "--- AndroidManifest.xml ---"
+          cat "$MANIFEST"
 
       - name: Build APK
         run: flutter build apk --release
