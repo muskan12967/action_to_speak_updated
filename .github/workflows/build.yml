@@ -26,7 +26,7 @@ jobs:
         run: |
           rm -f pubspec.lock
           sed -i '/speech_to_text/d' pubspec.yaml
-          sed -i '/flutter_tts/a\  speech_to_text: 6.5.0' pubspec.yaml
+          sed -i '/flutter_tts/a\  speech_to_text: 6.6.2' pubspec.yaml
           echo "--- pubspec speech_to_text ---"
           grep speech_to_text pubspec.yaml
 
@@ -38,19 +38,16 @@ jobs:
           rm -rf android/
           flutter create --platforms=android .
 
-      - name: Fix build.gradle.kts using Python
+      - name: Fix build.gradle.kts and AGP version using Python
         run: |
           python3 << 'PYEOF'
           import re
 
+          # ── 1. Fix app/build.gradle.kts SDK versions ──────────────────────
           path = "android/app/build.gradle.kts"
           with open(path, "r") as f:
               content = f.read()
 
-          print("=== BEFORE ===")
-          print(content)
-
-          # Set minSdk, targetSdk, compileSdk
           content = re.sub(r'minSdk\s*=\s*flutter\.minSdkVersion', 'minSdk = 24', content)
           content = re.sub(r'minSdk\s*=\s*\d+', 'minSdk = 24', content)
           content = re.sub(r'targetSdk\s*=\s*flutter\.targetSdkVersion', 'targetSdk = 36', content)
@@ -58,14 +55,50 @@ jobs:
           content = re.sub(r'compileSdk\s*=\s*flutter\.compileSdkVersion', 'compileSdk = 36', content)
           content = re.sub(r'compileSdk\s*=\s*\d+', 'compileSdk = 36', content)
 
-          print("=== AFTER ===")
-          print(content)
-
           with open(path, "w") as f:
               f.write(content)
+          print("app/build.gradle.kts fixed")
+          print(content)
 
-          print("Done!")
+          # ── 2. Fix root build.gradle.kts AGP version ──────────────────────
+          # The Registrar error is caused by AGP 8.x removing old plugin APIs.
+          # Downgrade AGP to 7.3.0 which still supports Registrar.
+          root_path = "android/build.gradle.kts"
+          with open(root_path, "r") as f:
+              root_content = f.read()
+
+          print("=== ROOT build.gradle.kts BEFORE ===")
+          print(root_content)
+
+          # Replace AGP version — handles both quoted and unquoted styles
+          root_content = re.sub(
+              r'com\.android\.tools\.build:gradle:[^\'"}\s]+',
+              'com.android.tools.build:gradle:7.3.0',
+              root_content
+          )
+          # Also handle id("com.android.application") version style in kts
+          root_content = re.sub(
+              r'(id\("com\.android\.application"\)\s+version\s+")[^"]+(")',
+              r'\g<1>7.3.0\g<2>',
+              root_content
+          )
+
+          print("=== ROOT build.gradle.kts AFTER ===")
+          print(root_content)
+
+          with open(root_path, "w") as f:
+              f.write(root_content)
+          print("root build.gradle.kts fixed")
           PYEOF
+
+      - name: Fix Gradle wrapper version to match AGP 7.3.0
+        run: |
+          # AGP 7.3.0 requires Gradle 7.4+
+          WRAPPER="android/gradle/wrapper/gradle-wrapper.properties"
+          cat "$WRAPPER"
+          sed -i 's|distributionUrl=.*|distributionUrl=https\\://services.gradle.org/distributions/gradle-7.6.1-all.zip|g' "$WRAPPER"
+          echo "--- Gradle wrapper after fix ---"
+          cat "$WRAPPER"
 
       - name: Add permissions to AndroidManifest
         run: |
