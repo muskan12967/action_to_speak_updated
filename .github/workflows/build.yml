@@ -33,26 +33,37 @@ jobs:
       - name: Get packages
         run: flutter pub get
 
-      - name: Create Android project files
+      - name: Setup Android directory
         run: |
+          # Remove any broken android folder and regenerate cleanly
+          rm -rf android/
           flutter create --platforms=android .
-          echo "--- Listing android/app/ ---"
-          ls android/app/
+          echo "--- Gradle files found ---"
+          find . -name "*.gradle" | grep -v ".dart_tool"
 
       - name: Fix Android build settings
         run: |
-          BUILD_GRADLE="android/app/build.gradle"
-          if [ -f "$BUILD_GRADLE" ]; then
-            sed -i 's/minSdkVersion .*/minSdkVersion 24/g' "$BUILD_GRADLE"
-            sed -i 's/targetSdkVersion .*/targetSdkVersion 34/g' "$BUILD_GRADLE"
-            # Also handle flutter.minSdkVersion style
+          # Find build.gradle wherever it is
+          BUILD_GRADLE=$(find android/ -name "build.gradle" | grep "app/build.gradle" | head -1)
+          
+          if [ -z "$BUILD_GRADLE" ]; then
+            # Try kotlin dsl
+            BUILD_GRADLE=$(find android/ -name "build.gradle.kts" | grep "app" | head -1)
+          fi
+          
+          echo "Found: $BUILD_GRADLE"
+          
+          if [ -n "$BUILD_GRADLE" ]; then
             sed -i 's/minSdkVersion flutter\.minSdkVersion/minSdkVersion 24/g' "$BUILD_GRADLE"
-            echo "--- SDK versions in build.gradle ---"
-            grep -E "minSdkVersion|targetSdkVersion|compileSdkVersion" "$BUILD_GRADLE"
+            sed -i 's/minSdkVersion [0-9]*/minSdkVersion 24/g' "$BUILD_GRADLE"
+            sed -i 's/targetSdkVersion [0-9]*/targetSdkVersion 34/g' "$BUILD_GRADLE"
+            echo "--- SDK versions ---"
+            grep -E "minSdk|targetSdk|compileSdk" "$BUILD_GRADLE"
           else
-            echo "build.gradle still not found after flutter create"
-            echo "--- Contents of android/ ---"
-            find android/ -name "*.gradle" 2>/dev/null || echo "No gradle files found"
+            echo "--- All gradle files ---"
+            find android/ -name "*.gradle*"
+            echo "--- android/app/ contents ---"
+            ls -la android/app/ 2>/dev/null || echo "android/app/ missing"
             exit 1
           fi
 
