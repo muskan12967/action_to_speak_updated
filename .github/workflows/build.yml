@@ -25,8 +25,6 @@ jobs:
       - name: Fix dependencies
         run: |
           rm -f pubspec.lock
-          # Remove old speech_to_text and replace with 7.0.0
-          # which uses modern FlutterPlugin API compatible with AGP 8.x
           sed -i '/speech_to_text/d' pubspec.yaml
           sed -i '/flutter_tts/a\  speech_to_text: ^7.0.0' pubspec.yaml
           echo "--- Updated pubspec dependencies ---"
@@ -39,6 +37,31 @@ jobs:
         run: |
           rm -rf android/
           flutter create --platforms=android .
+
+      - name: Restore assets in pubspec.yaml
+        run: |
+          python3 << 'PYEOF'
+          with open("pubspec.yaml", "r") as f:
+              content = f.read()
+
+          assets_block = """\n  assets:\n    - assets/model.tflite\n    - assets/videos/book.mp4\n    - assets/videos/friend.mp4\n    - assets/videos/father.mp4\n    - assets/videos/family.mp4\n    - assets/videos/student.mp4\n    - assets/videos/write.mp4\n    - assets/videos/mother.mp4\n    - assets/videos/read.mp4\n    - assets/videos/home.mp4\n"""
+
+          if "assets/model.tflite" not in content:
+              content = content.replace(
+                  "  uses-material-design: true",
+                  "  uses-material-design: true" + assets_block
+              )
+              print("Assets block added")
+          else:
+              print("Assets already present")
+
+          with open("pubspec.yaml", "w") as f:
+              f.write(content)
+
+          # Verify
+          with open("pubspec.yaml", "r") as f:
+              print(f.read())
+          PYEOF
 
       - name: Fix SDK versions in build.gradle.kts
         run: |
@@ -64,6 +87,7 @@ jobs:
 
           with open(path, "w") as f:
               f.write(content)
+
           print("Done!")
           PYEOF
 
@@ -71,7 +95,16 @@ jobs:
         run: |
           MANIFEST="android/app/src/main/AndroidManifest.xml"
           sed -i 's|<application|<uses-permission android:name="android.permission.CAMERA"/>\n    <uses-permission android:name="android.permission.RECORD_AUDIO"/>\n    <uses-permission android:name="android.permission.INTERNET"/>\n    <application|g' "$MANIFEST"
+          echo "--- Permissions ---"
           grep "uses-permission" "$MANIFEST"
+
+      - name: Verify assets exist
+        run: |
+          echo "--- Checking assets ---"
+          ls -la assets/
+          ls -la assets/videos/
+          echo "--- pubspec assets section ---"
+          grep -A 15 "assets:" pubspec.yaml
 
       - name: Build APK
         run: flutter build apk --release
