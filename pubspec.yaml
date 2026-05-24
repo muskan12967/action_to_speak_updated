@@ -1,39 +1,54 @@
-name: action_to_speak_updated
-description: "AI based sign recognition"
-publish_to: 'none'
+name: Build Flutter APK
 
-version: 1.0.0+1
+on:
+  workflow_dispatch:
 
-environment:
-  sdk: ">=3.3.0 <4.0.0"
+jobs:
+  build:
+    runs-on: ubuntu-latest
 
-dependencies:
-  flutter:
-    sdk: flutter
+    steps:
+      - uses: actions/checkout@v4
 
-  cupertino_icons: ^1.0.8
-  permission_handler: ^11.3.0
-  lottie: ^3.0.0
-  video_player: ^2.8.2
-  chewie: ^1.7.5
-  image_picker: ^1.0.7
-  image: ^4.8.0
-  speech_to_text: ^7.0.0     # Stable version
-  camera: ^0.11.4              # Compatible with hand_landmarker
-  flutter_tts: ^3.8.5
-  tflite_flutter: ^0.12.0       # Stable version
-  hand_landmarker: ^2.2.0       # Compatible version
-  google_mlkit_commons: ^0.9.0
-      
-dev_dependencies:
-  flutter_test:
-    sdk: flutter
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
 
-flutter:
-  uses-material-design: true
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.41.9'
+          channel: 'stable'
 
+      - name: Show repo contents
+        run: |
+          echo "=== assets/ ==="
+          ls -lh assets/
+          echo "=== model.tflite ==="
+          ls -lh assets/model.tflite
+          echo "=== pubspec.yaml ==="
+          cat pubspec.yaml
+
+      - name: Fix pubspec.yaml
+        run: |
+          python3 << 'PYEOF'
+          import re
+
+          with open("pubspec.yaml", "r") as f:
+              content = f.read()
+
+          # Fix speech_to_text
+          content = re.sub(r'speech_to_text:.*', 'speech_to_text: ^7.0.0', content)
+
+          # Remove any existing assets block and rewrite clean
+          # Remove everything between 'assets:' and next top-level key
+          content = re.sub(r'\n  assets:.*?(?=\n\S|\n  \S[^-]|\Z)', '', content, flags=re.DOTALL)
+
+          # Add clean assets block before end of flutter section
+          assets_block = """
   assets:
-    - assets/logo.png
     - assets/model.tflite
     - assets/videos/book.mp4
     - assets/videos/friend.mp4
@@ -43,4 +58,105 @@ flutter:
     - assets/videos/write.mp4
     - assets/videos/mother.mp4
     - assets/videos/read.mp4
-    - assets/videos/home.mp4
+    - assets/videos/home.mp4"""
+
+          # Insert after uses-material-design line
+          content = re.sub(
+              r'(  uses-material-design: true)',
+              r'\1' + assets_block,
+              content
+          )
+
+          with open("pubspec.yaml", "w") as f:
+              f.write(content)
+
+          print("=== Final pubspec.yaml ===")
+          print(content)
+          PYEOF
+
+      - name: Remove lock file
+        run: rm -f pubspec.lock
+
+      - name: Get packages
+        run: flutter pub get
+
+      - name: Setup Android folder
+        run: |
+          # Only regenerate if android folder is missing or incomplete
+          if [ ! -f "android/app/build.gradle" ] && [ ! -f "android/app/build.gradle.kts" ]; then
+            echo "Android folder missing — regenerating"
+            # Backup pubspec and assets first
+            cp pubspec.yaml /tmp/pubspec_backup.yaml
+            cp -r assets /tmp/assets_backup
+            rm -rf android/
+            flutter create --platforms=android .
+            # Restore immediately
+            cp /tmp/pubspec_backup.yaml pubspec.yaml
+            cp -r /tmp/assets_backup/. assets/
+            flutter pub get
+            echo "Android regenerated and pubspec restored"
+          else
+            echo "Android folder already exists — skipping flutter create"
+          fi
+
+      - name: Fix build.gradle.kts
+        run: |
+          python3 << 'PYEOF'
+          import re, os
+
+          # Handle both .kts and regular .gradle
+          if os.path.exists("android/app/build.gradle.kts"):
+              path = "android/app/build.gradle.kts"
+          else:
+              path = "android/app/build.gradle"
+
+          print(f"Fixing: {path}")
+          with open(path, "r") as f:
+              content = f.read()
+
+          print("=== BEFORE ===")
+          print(content)
+
+          content = re.sub(r'minSdk\s*=\s*\S+', 'minSdk = 24', content)
+          content = re.sub(r'minSdkVersion\s+\S+', 'minSdkVersion 24', content)
+          content = re.sub(r'targetSdk\s*=\s*\S+', 'targetSdk = 36', content)
+          content = re.sub(r'targetSdkVersion\s+\S+', 'targetSdkVersion 36', content)
+          content = re.sub(r'compileSdk\s*=\s*\S+', 'compileSdk = 36', content)
+          content = re.sub(r'compileSdkVersion\s+\S+', 'compileSdkVersion 36', content)
+
+          print("=== AFTER ===")
+          print(content)
+
+          with open(path, "w") as f:
+              f.write(content)
+          PYEOF
+
+      - name: Add permissions to AndroidManifest
+        run: |
+          M="android/app/src/main/AndroidManifest.xml"
+          # Only add if not already present
+          if ! grep -q "android.permission.CAMERA" "$M"; then
+            sed -i 's|<application|<uses-permission android:name="android.permission.CAMERA"/>\n    <uses-permission android:name="android.permission.RECORD_AUDIO"/>\n    <uses-permission android:name="android.permission.INTERNET"/>\n    <application|g' "$M"
+            echo "Permissions added"
+          else
+            echo "Permissions already present"
+          fi
+          grep "uses-permission" "$M"
+
+      - name: FINAL VERIFY
+        run: |
+          echo "=== model.tflite ==="
+          ls -lh assets/model.tflite
+          echo "=== pubspec assets section ==="
+          grep -A 15 "assets:" pubspec.yaml
+          echo "=== All assets ==="
+          find assets/ -type f | sort
+
+      - name: Build APK
+        run: flutter build apk --release
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-release-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
