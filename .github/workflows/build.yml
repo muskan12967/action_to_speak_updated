@@ -28,41 +28,11 @@ jobs:
           echo "=== model.tflite ===" && ls -lh assets/model.tflite
           echo "=== pubspec.yaml ===" && cat pubspec.yaml
 
-      - name: Write and run pubspec fixer
-        run: |
-          cat > /tmp/fix_pubspec.py << 'PYEOF'
-import re
+      - name: Fix pubspec.yaml
+        run: python3 fix_pubspec.py
 
-with open("pubspec.yaml") as f:
-    c = f.read()
-
-c = re.sub(r'speech_to_text:.*', 'speech_to_text: ^7.0.0', c)
-c = re.sub(r'\n  assets:[\s\S]*?(?=\n\w|\Z)', '', c)
-
-marker = '  uses-material-design: true'
-assets = (
-    '\n  assets:'
-    '\n    - assets/model.tflite'
-    '\n    - assets/videos/book.mp4'
-    '\n    - assets/videos/friend.mp4'
-    '\n    - assets/videos/father.mp4'
-    '\n    - assets/videos/family.mp4'
-    '\n    - assets/videos/student.mp4'
-    '\n    - assets/videos/write.mp4'
-    '\n    - assets/videos/mother.mp4'
-    '\n    - assets/videos/read.mp4'
-    '\n    - assets/videos/home.mp4'
-)
-c = c.replace(marker, marker + assets)
-
-with open("pubspec.yaml", "w") as f:
-    f.write(c)
-
-print("pubspec fixed")
-print(c)
-PYEOF
-          python3 /tmp/fix_pubspec.py
-          rm -f pubspec.lock
+      - name: Remove lock file
+        run: rm -f pubspec.lock
 
       - name: Get packages
         run: flutter pub get
@@ -82,29 +52,8 @@ PYEOF
             echo "Android folder exists, skipping flutter create"
           fi
 
-      - name: Write and run gradle fixer
-        run: |
-          cat > /tmp/fix_gradle.py << 'PYEOF'
-import re, os
-
-p = 'android/app/build.gradle.kts' if os.path.exists('android/app/build.gradle.kts') else 'android/app/build.gradle'
-print('Fixing: ' + p)
-
-with open(p) as f:
-    c = f.read()
-
-c = re.sub(r'minSdk\s*=\s*\S+', 'minSdk = 24', c)
-c = re.sub(r'minSdkVersion\s+\S+', 'minSdkVersion 24', c)
-c = re.sub(r'targetSdk\s*=\s*\S+', 'targetSdk = 36', c)
-c = re.sub(r'targetSdkVersion\s+\S+', 'targetSdkVersion 36', c)
-c = re.sub(r'compileSdk\s*=\s*\S+', 'compileSdk = 36', c)
-
-with open(p, 'w') as f:
-    f.write(c)
-
-print(c)
-PYEOF
-          python3 /tmp/fix_gradle.py
+      - name: Fix build.gradle SDK versions
+        run: python3 fix_gradle.py
 
       - name: Add permissions to AndroidManifest
         run: |
