@@ -24,133 +24,78 @@ jobs:
 
       - name: Show repo contents
         run: |
-          echo "=== assets/ ==="
-          ls -lh assets/
-          echo "=== model.tflite ==="
-          ls -lh assets/model.tflite
-          echo "=== pubspec.yaml ==="
-          cat pubspec.yaml
+          echo "=== assets/ ===" && ls -lh assets/
+          echo "=== model.tflite ===" && ls -lh assets/model.tflite
+          echo "=== pubspec.yaml ===" && cat pubspec.yaml
 
-      - name: Fix pubspec.yaml
+      - name: Fix pubspec and assets
         run: |
-          python3 << 'PYEOF'
-          import re
+          # Fix speech_to_text version
+          sed -i 's/speech_to_text:.*/speech_to_text: ^7.0.0/' pubspec.yaml
 
-          with open("pubspec.yaml", "r") as f:
-              content = f.read()
-
-          # Fix speech_to_text
-          content = re.sub(r'speech_to_text:.*', 'speech_to_text: ^7.0.0', content)
-
-          # Remove any existing assets block and rewrite clean
-          # Remove everything between 'assets:' and next top-level key
-          content = re.sub(r'\n  assets:.*?(?=\n\S|\n  \S[^-]|\Z)', '', content, flags=re.DOTALL)
-
-          # Add clean assets block before end of flutter section
-          assets_block = """
-  assets:
-    - assets/model.tflite
-    - assets/videos/book.mp4
-    - assets/videos/friend.mp4
-    - assets/videos/father.mp4
-    - assets/videos/family.mp4
-    - assets/videos/student.mp4
-    - assets/videos/write.mp4
-    - assets/videos/mother.mp4
-    - assets/videos/read.mp4
-    - assets/videos/home.mp4"""
-
-          # Insert after uses-material-design line
-          content = re.sub(
-              r'(  uses-material-design: true)',
-              r'\1' + assets_block,
-              content
-          )
-
-          with open("pubspec.yaml", "w") as f:
-              f.write(content)
-
-          print("=== Final pubspec.yaml ===")
-          print(content)
-          PYEOF
-
-      - name: Remove lock file
-        run: rm -f pubspec.lock
+          # Remove old assets block
+          python3 -c "
+import re
+with open('pubspec.yaml') as f:
+    c = f.read()
+c = re.sub(r'\n  assets:[\s\S]*?(?=\n\w|\Z)', '', c)
+marker = '  uses-material-design: true'
+block = marker + '\n  assets:\n    - assets/model.tflite\n    - assets/videos/book.mp4\n    - assets/videos/friend.mp4\n    - assets/videos/father.mp4\n    - assets/videos/family.mp4\n    - assets/videos/student.mp4\n    - assets/videos/write.mp4\n    - assets/videos/mother.mp4\n    - assets/videos/read.mp4\n    - assets/videos/home.mp4'
+c = c.replace(marker, block)
+with open('pubspec.yaml', 'w') as f:
+    f.write(c)
+print('pubspec fixed')
+"
+          echo "=== pubspec flutter section ===" && grep -A 20 "^flutter:" pubspec.yaml
+          rm -f pubspec.lock
 
       - name: Get packages
         run: flutter pub get
 
       - name: Setup Android folder
         run: |
-          # Only regenerate if android folder is missing or incomplete
           if [ ! -f "android/app/build.gradle" ] && [ ! -f "android/app/build.gradle.kts" ]; then
-            echo "Android folder missing — regenerating"
-            # Backup pubspec and assets first
-            cp pubspec.yaml /tmp/pubspec_backup.yaml
-            cp -r assets /tmp/assets_backup
+            echo "Regenerating android folder..."
+            cp pubspec.yaml /tmp/pubspec_bak.yaml
+            cp -r assets /tmp/assets_bak
             rm -rf android/
             flutter create --platforms=android .
-            # Restore immediately
-            cp /tmp/pubspec_backup.yaml pubspec.yaml
-            cp -r /tmp/assets_backup/. assets/
+            cp /tmp/pubspec_bak.yaml pubspec.yaml
+            cp -r /tmp/assets_bak/. assets/
             flutter pub get
-            echo "Android regenerated and pubspec restored"
           else
-            echo "Android folder already exists — skipping flutter create"
+            echo "Android folder exists, skipping flutter create"
           fi
 
-      - name: Fix build.gradle.kts
+      - name: Fix build.gradle SDK versions
         run: |
-          python3 << 'PYEOF'
-          import re, os
-
-          # Handle both .kts and regular .gradle
-          if os.path.exists("android/app/build.gradle.kts"):
-              path = "android/app/build.gradle.kts"
-          else:
-              path = "android/app/build.gradle"
-
-          print(f"Fixing: {path}")
-          with open(path, "r") as f:
-              content = f.read()
-
-          print("=== BEFORE ===")
-          print(content)
-
-          content = re.sub(r'minSdk\s*=\s*\S+', 'minSdk = 24', content)
-          content = re.sub(r'minSdkVersion\s+\S+', 'minSdkVersion 24', content)
-          content = re.sub(r'targetSdk\s*=\s*\S+', 'targetSdk = 36', content)
-          content = re.sub(r'targetSdkVersion\s+\S+', 'targetSdkVersion 36', content)
-          content = re.sub(r'compileSdk\s*=\s*\S+', 'compileSdk = 36', content)
-          content = re.sub(r'compileSdkVersion\s+\S+', 'compileSdkVersion 36', content)
-
-          print("=== AFTER ===")
-          print(content)
-
-          with open(path, "w") as f:
-              f.write(content)
-          PYEOF
+          python3 -c "
+import re, os
+p = 'android/app/build.gradle.kts' if os.path.exists('android/app/build.gradle.kts') else 'android/app/build.gradle'
+print('Fixing: ' + p)
+c = open(p).read()
+c = re.sub(r'minSdk\s*=\s*\S+', 'minSdk = 24', c)
+c = re.sub(r'minSdkVersion\s+\S+', 'minSdkVersion 24', c)
+c = re.sub(r'targetSdk\s*=\s*\S+', 'targetSdk = 36', c)
+c = re.sub(r'targetSdkVersion\s+\S+', 'targetSdkVersion 36', c)
+c = re.sub(r'compileSdk\s*=\s*\S+', 'compileSdk = 36', c)
+open(p, 'w').write(c)
+print(c)
+"
 
       - name: Add permissions to AndroidManifest
         run: |
           M="android/app/src/main/AndroidManifest.xml"
-          # Only add if not already present
-          if ! grep -q "android.permission.CAMERA" "$M"; then
+          if ! grep -q "CAMERA" "$M"; then
             sed -i 's|<application|<uses-permission android:name="android.permission.CAMERA"/>\n    <uses-permission android:name="android.permission.RECORD_AUDIO"/>\n    <uses-permission android:name="android.permission.INTERNET"/>\n    <application|g' "$M"
-            echo "Permissions added"
-          else
-            echo "Permissions already present"
           fi
           grep "uses-permission" "$M"
 
-      - name: FINAL VERIFY
+      - name: Final verify
         run: |
-          echo "=== model.tflite ==="
-          ls -lh assets/model.tflite
-          echo "=== pubspec assets section ==="
-          grep -A 15 "assets:" pubspec.yaml
-          echo "=== All assets ==="
-          find assets/ -type f | sort
+          echo "=== model.tflite ===" && ls -lh assets/model.tflite
+          echo "=== assets in pubspec ===" && grep -A 15 "assets:" pubspec.yaml
+          echo "=== all assets ===" && find assets/ -type f | sort
 
       - name: Build APK
         run: flutter build apk --release
