@@ -29,15 +29,21 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
 
   List<List<double>> sequence = [];
 
-  String detectedText = "";
-  String lastResult   = "";
-  String modelStatus  = "Loading model...";
-  String micStatus    = "Mic off";
+  String detectedText  = "";
+  String lastResult    = "";
+  String modelStatus   = "Loading model...";
+  String micStatus     = "Mic off";
+  String debugStatus   = "No hands yet"; // shows live hand count
 
   DateTime lastTrigger = DateTime.now();
 
   final int SEQ_LEN            = 25;
   final int FEATURES_PER_FRAME = 126;
+
+  // ROTATION: tap buttons in UI to find the right value for your device
+  int _rotation = 90;
+
+  int _frameCount = 0; // for throttling debug prints
 
   final TextEditingController textController = TextEditingController();
   final FocusNode             textFocusNode  = FocusNode();
@@ -126,7 +132,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     } catch (e) {
       setState(() {
         isModelLoaded = false;
-        modelStatus   = "Error loading model";
+        modelStatus   = "Model error: ${e.toString().substring(0, min(50, e.toString().length))}";
       });
       print("Error loading model: $e");
       _showModelErrorDialog();
@@ -138,7 +144,11 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
       await controller?.stopImageStream();
       await controller?.dispose();
       controller = null;
-      setState(() { isCameraOn = false; isStreamActive = false; });
+      setState(() {
+        isCameraOn    = false;
+        isStreamActive = false;
+        debugStatus   = "No hands yet";
+      });
     } else {
       if (!isModelLoaded) { _showSnackBar("Model not loaded yet."); return; }
       setState(() => isCameraOn = true);
@@ -178,14 +188,34 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     controller!.startImageStream((CameraImage image) async {
       if (isProcessing) return;
       isProcessing = true;
+
       try {
         final List<Hand> hands = await Future.microtask(
-          () => _plugin!.detect(image, 90),
+          () => _plugin!.detect(image, _rotation),
         );
+
+        _frameCount++;
+
+        // Debug: update UI status + print every 30 frames
+        if (_frameCount % 30 == 0) {
+          print("=== Frame $_frameCount | Hands: ${hands.length} | Rotation: $_rotation° ===");
+          if (hands.isNotEmpty) {
+            print("Hand0 wrist x=${hands[0].landmarks[0].x.toStringAsFixed(3)} "
+                  "y=${hands[0].landmarks[0].y.toStringAsFixed(3)} "
+                  "z=${hands[0].landmarks[0].z.toStringAsFixed(3)}");
+          }
+          if (mounted) {
+            setState(() {
+              debugStatus = "Hands: ${hands.length} | Rot: $_rotation° | Frames: $_frameCount";
+            });
+          }
+        }
+
         if (mounted) _processHands(hands);
       } catch (e) {
         print("Stream error: $e");
       }
+
       isProcessing = false;
     });
   }
@@ -197,13 +227,27 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     if (hands.isNotEmpty)  hand0 = _toFeatures(hands[0]);
     if (hands.length >= 2) hand1 = _toFeatures(hands[1]);
 
-    final frame = [...hand0, ...hand1];
+    final frame = [...hand0, ...hand1]; // 126 values
     sequence.add(frame);
     if (sequence.length > SEQ_LEN) sequence.removeAt(0);
 
     if (sequence.length == SEQ_LEN) {
+      // Debug: print raw model scores every 30 frames
+      if (_frameCount % 30 == 0 && interpreter != null) {
+        try {
+          final dbgOut = List.generate(1, (_) => List.filled(labels.length, 0.0));
+          interpreter!.run([List<List<double>>.from(sequence)], dbgOut);
+          final scores = dbgOut[0].asMap().entries
+              .map((e) => "${labels[e.key]}:${e.value.toStringAsFixed(2)}")
+              .join(", ");
+          print("Raw scores → $scores");
+        } catch (_) {}
+      }
+
       final pred = predict(sequence);
       final now  = DateTime.now();
+
+      print("Prediction: $pred");
 
       if (pred != "unknown" &&
           pred != lastResult &&
@@ -211,7 +255,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
         lastResult  = pred;
         lastTrigger = now;
         if (mounted) setState(() => detectedText = pred);
-        print("SIGN DETECTED: $pred");
+        print("✅ SIGN DETECTED: $pred");
         tts.speak(pred);
         _showVideo(pred);
       }
@@ -228,13 +272,13 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
       out.add(lm.y - wy);
       out.add(lm.z - wz);
     }
-    return out;
+    return out; // 63 values
   }
 
   String predict(List<List<double>> seq) {
     if (interpreter == null || !isModelLoaded) return "unknown";
     try {
-      final input  = [seq];
+      final input  = [seq]; // shape [1, 25, 126]
       final output = List.generate(1, (_) => List.filled(labels.length, 0.0));
       interpreter!.run(input, output);
 
@@ -243,8 +287,9 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
       for (int i = 1; i < labels.length; i++) {
         if (output[0][i] > score) { score = output[0][i]; best = i; }
       }
-      print("Pred: ${labels[best]} (${score.toStringAsFixed(3)})");
-      return score > 0.6 ? labels[best] : "unknown";
+      print("Best: ${labels[best]} (${score.toStringAsFixed(3)})");
+      // Lowered threshold from 0.6 → 0.4 for better detection sensitivity
+      return score > 0.4 ? labels[best] : "unknown";
     } catch (e) {
       print("Prediction error: $e");
       return "unknown";
@@ -334,7 +379,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
               SizedBox(height: 8),
               Text("1. Copy model.tflite to assets/"),
               Text("2. Add it in pubspec.yaml under assets"),
-              Text("3. flutter clean && flutter pub get"),
+              Text("3. Commit and push to GitHub"),
             ],
           ),
           actions: [TextButton(
@@ -357,6 +402,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
             const Text("2. Show your hand sign to the camera"),
             const Text("3. App speaks the detected sign"),
             const Text("4. Type or speak Roman Urdu words"),
+            const Text("5. Use rotation buttons if hands not detected"),
             const SizedBox(height: 10),
             const Text("Available signs:",
                 style: TextStyle(fontWeight: FontWeight.bold)),
@@ -389,6 +435,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
       ),
       body: Column(children: [
 
+        // ── Camera preview ─────────────────────────────────────────────────
         Expanded(
           flex: 2,
           child: Container(
@@ -420,8 +467,9 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
           ),
         ),
 
+        // ── Detection result ───────────────────────────────────────────────
         Container(
-          margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
           padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
             color: Colors.blue.shade50,
@@ -442,6 +490,61 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
           ]),
         ),
 
+        // ── Debug status bar ───────────────────────────────────────────────
+        Container(
+          margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+          decoration: BoxDecoration(
+            color: Colors.grey.shade100,
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(color: Colors.grey.shade300),
+          ),
+          child: Row(children: [
+            const Icon(Icons.bug_report, size: 14, color: Colors.grey),
+            const SizedBox(width: 6),
+            Expanded(child: Text(
+              debugStatus,
+              style: const TextStyle(fontSize: 11, color: Colors.grey),
+            )),
+          ]),
+        ),
+
+        // ── Rotation selector ──────────────────────────────────────────────
+        // If hands not detected, tap each button to find correct rotation
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
+          child: Row(children: [
+            const Text("Cam rotation: ",
+                style: TextStyle(fontSize: 11, color: Colors.black54)),
+            ...[0, 90, 180, 270].map((r) => Padding(
+              padding: const EdgeInsets.only(right: 4),
+              child: GestureDetector(
+                onTap: () {
+                  setState(() => _rotation = r);
+                  // Reset stream so new rotation takes effect
+                  sequence.clear();
+                  _showSnackBar("Rotation → $r° (restart camera if needed)");
+                  print("Rotation changed to $r°");
+                },
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: _rotation == r ? Colors.blue : Colors.grey.shade200,
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: Text("$r°",
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                        color: _rotation == r ? Colors.white : Colors.black54,
+                      )),
+                ),
+              ),
+            )).toList(),
+          ]),
+        ),
+
+        // ── Text input ─────────────────────────────────────────────────────
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
           child: Row(children: [
@@ -471,8 +574,9 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
           ]),
         ),
 
+        // ── Quick chips ────────────────────────────────────────────────────
         SizedBox(
-          height: 50,
+          height: 48,
           child: ListView(
             scrollDirection: Axis.horizontal,
             padding: const EdgeInsets.symmetric(horizontal: 12),
@@ -487,8 +591,9 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
           ),
         ),
 
+        // ── Control buttons ────────────────────────────────────────────────
         Padding(
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceEvenly,
             children: [
