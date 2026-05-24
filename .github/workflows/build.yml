@@ -28,25 +28,40 @@ jobs:
           echo "=== model.tflite ===" && ls -lh assets/model.tflite
           echo "=== pubspec.yaml ===" && cat pubspec.yaml
 
-      - name: Fix pubspec and assets
+      - name: Write and run pubspec fixer
         run: |
-          # Fix speech_to_text version
-          sed -i 's/speech_to_text:.*/speech_to_text: ^7.0.0/' pubspec.yaml
-
-          # Remove old assets block
-          python3 -c "
+          cat > /tmp/fix_pubspec.py << 'PYEOF'
 import re
-with open('pubspec.yaml') as f:
+
+with open("pubspec.yaml") as f:
     c = f.read()
+
+c = re.sub(r'speech_to_text:.*', 'speech_to_text: ^7.0.0', c)
 c = re.sub(r'\n  assets:[\s\S]*?(?=\n\w|\Z)', '', c)
+
 marker = '  uses-material-design: true'
-block = marker + '\n  assets:\n    - assets/model.tflite\n    - assets/videos/book.mp4\n    - assets/videos/friend.mp4\n    - assets/videos/father.mp4\n    - assets/videos/family.mp4\n    - assets/videos/student.mp4\n    - assets/videos/write.mp4\n    - assets/videos/mother.mp4\n    - assets/videos/read.mp4\n    - assets/videos/home.mp4'
-c = c.replace(marker, block)
-with open('pubspec.yaml', 'w') as f:
+assets = (
+    '\n  assets:'
+    '\n    - assets/model.tflite'
+    '\n    - assets/videos/book.mp4'
+    '\n    - assets/videos/friend.mp4'
+    '\n    - assets/videos/father.mp4'
+    '\n    - assets/videos/family.mp4'
+    '\n    - assets/videos/student.mp4'
+    '\n    - assets/videos/write.mp4'
+    '\n    - assets/videos/mother.mp4'
+    '\n    - assets/videos/read.mp4'
+    '\n    - assets/videos/home.mp4'
+)
+c = c.replace(marker, marker + assets)
+
+with open("pubspec.yaml", "w") as f:
     f.write(c)
-print('pubspec fixed')
-"
-          echo "=== pubspec flutter section ===" && grep -A 20 "^flutter:" pubspec.yaml
+
+print("pubspec fixed")
+print(c)
+PYEOF
+          python3 /tmp/fix_pubspec.py
           rm -f pubspec.lock
 
       - name: Get packages
@@ -67,21 +82,29 @@ print('pubspec fixed')
             echo "Android folder exists, skipping flutter create"
           fi
 
-      - name: Fix build.gradle SDK versions
+      - name: Write and run gradle fixer
         run: |
-          python3 -c "
+          cat > /tmp/fix_gradle.py << 'PYEOF'
 import re, os
+
 p = 'android/app/build.gradle.kts' if os.path.exists('android/app/build.gradle.kts') else 'android/app/build.gradle'
 print('Fixing: ' + p)
-c = open(p).read()
+
+with open(p) as f:
+    c = f.read()
+
 c = re.sub(r'minSdk\s*=\s*\S+', 'minSdk = 24', c)
 c = re.sub(r'minSdkVersion\s+\S+', 'minSdkVersion 24', c)
 c = re.sub(r'targetSdk\s*=\s*\S+', 'targetSdk = 36', c)
 c = re.sub(r'targetSdkVersion\s+\S+', 'targetSdkVersion 36', c)
 c = re.sub(r'compileSdk\s*=\s*\S+', 'compileSdk = 36', c)
-open(p, 'w').write(c)
+
+with open(p, 'w') as f:
+    f.write(c)
+
 print(c)
-"
+PYEOF
+          python3 /tmp/fix_gradle.py
 
       - name: Add permissions to AndroidManifest
         run: |
