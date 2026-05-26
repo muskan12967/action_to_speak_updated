@@ -41,7 +41,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   final int SEQ_LEN            = 25;
   final int FEATURES_PER_FRAME = 126;
 
-  int _rotation  = 90;
+  int _rotation   = 90;
   int _frameCount = 0;
 
   final TextEditingController textController = TextEditingController();
@@ -118,28 +118,32 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     try {
       setState(() => modelStatus = "Loading model...");
 
+      // tflite_flutter 0.10.4 — load with options
+      final options = InterpreterOptions()..threads = 2;
       interpreter = await Interpreter.fromAsset(
         "assets/model.tflite",
+        options: options,
       );
 
-      // Print exact tensor info for debugging
-      final inputTensor  = interpreter!.getInputTensor(0);
-      final outputTensor = interpreter!.getOutputTensor(0);
+      // Resize input tensor to exactly [1, 25, 126]
+      interpreter!.resizeInputTensor(0, [1, SEQ_LEN, FEATURES_PER_FRAME]);
+      interpreter!.allocateTensors();
 
-      print("=== MODEL LOADED ===");
-      print("Input  shape: ${inputTensor.shape}  type: ${inputTensor.type}");
-      print("Output shape: ${outputTensor.shape}  type: ${outputTensor.type}");
-      print("===================");
+      final inShape  = interpreter!.getInputTensor(0).shape;
+      final outShape = interpreter!.getOutputTensor(0).shape;
+
+      print("Input  shape: $inShape");
+      print("Output shape: $outShape");
 
       setState(() {
         isModelLoaded = true;
-        modelStatus   = "Model ready! In:${inputTensor.shape} Out:${outputTensor.shape}";
+        modelStatus   = "Model ready! $inShape → $outShape";
       });
 
     } catch (e) {
       setState(() {
         isModelLoaded = false;
-        modelStatus   = "Model error: ${e.toString().substring(0, min(60, e.toString().length))}";
+        modelStatus   = "Model error: ${e.toString().substring(0, min(80, e.toString().length))}";
       });
       print("Error loading model: $e");
       _showModelErrorDialog();
@@ -157,7 +161,10 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
         debugStatus    = "No hands yet";
       });
     } else {
-      if (!isModelLoaded) { _showSnackBar("Model not loaded yet."); return; }
+      if (!isModelLoaded) {
+        _showSnackBar("Model not loaded: $modelStatus");
+        return;
+      }
       setState(() => isCameraOn = true);
       await _initCamera();
     }
@@ -233,8 +240,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
       final pred = predict(sequence);
       final now  = DateTime.now();
 
-      print("Pred: $pred");
-
       if (pred != "unknown" &&
           pred != lastResult &&
           now.difference(lastTrigger).inMilliseconds > 1500) {
@@ -261,44 +266,46 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     return out;
   }
 
-  // ── tflite_flutter 0.12.0 compatible predict ──────────────────────────────
   String predict(List<List<double>> seq) {
     if (interpreter == null || !isModelLoaded) return "unknown";
     try {
-      // tflite_flutter 0.12.0: use Float32List for input
-      // Input shape: [1, 25, 126]
-      final inputFlat = Float32List(1 * SEQ_LEN * FEATURES_PER_FRAME);
-      int idx = 0;
+      // tflite_flutter 0.10.4 correct format:
+      // Input must be typed as List<List<List<double>>> with exact shape [1, 25, 126]
+      // Use Float32List internally to ensure correct dtype
+
+      // Build flat Float32List
+      final flat = Float32List(SEQ_LEN * FEATURES_PER_FRAME);
       for (int i = 0; i < SEQ_LEN; i++) {
         for (int j = 0; j < FEATURES_PER_FRAME; j++) {
-          inputFlat[idx++] = seq[i][j].toDouble();
+          flat[i * FEATURES_PER_FRAME + j] = seq[i][j];
         }
       }
 
-      // Output shape: [1, 9]
-      final outputFlat = Float32List(1 * labels.length);
+      // Reshape into [1, 25, 126] as List structure
+      final input = [
+        List.generate(SEQ_LEN, (i) =>
+          List.generate(FEATURES_PER_FRAME, (j) =>
+            flat[i * FEATURES_PER_FRAME + j].toDouble()
+          )
+        )
+      ];
 
-      // Reshape as typed data buffers
-      final inputBuffer  = inputFlat.buffer.asFloat32List();
-      final outputBuffer = outputFlat.buffer.asFloat32List();
+      // Output [1, 9]
+      final output = [List<double>.filled(labels.length, 0.0)];
 
-      interpreter!.run(inputBuffer, outputBuffer);
+      interpreter!.run(input, output);
 
-      // Find best label
       int    best  = 0;
-      double score = outputBuffer[0];
+      double score = output[0][0];
       for (int i = 1; i < labels.length; i++) {
-        if (outputBuffer[i] > score) {
-          score = outputBuffer[i];
+        if (output[0][i] > score) {
+          score = output[0][i];
           best  = i;
         }
       }
 
-      // Print all scores for debugging
       if (_frameCount % 30 == 0) {
-        final scores = List.generate(labels.length,
-            (i) => "${labels[i]}:${outputBuffer[i].toStringAsFixed(2)}");
-        print("Scores: $scores");
+        print("Scores: ${output[0].asMap().entries.map((e) => '${labels[e.key]}:${e.value.toStringAsFixed(2)}').join(', ')}");
       }
 
       print("Best: ${labels[best]} (${score.toStringAsFixed(3)})");
@@ -372,7 +379,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
 
   void _showSnackBar(String msg) {
     ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(msg), duration: const Duration(seconds: 2)));
+        SnackBar(content: Text(msg), duration: const Duration(seconds: 3)));
   }
 
   void clearText() { textController.clear(); setState(() => detectedText = ""); }
@@ -392,7 +399,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
                   style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.red)),
               const SizedBox(height: 8),
               const Text("Make sure model.tflite is in assets/ folder"),
-              const Text("and listed in pubspec.yaml"),
+              const Text("and listed in pubspec.yaml under assets:"),
             ],
           ),
           actions: [TextButton(
@@ -415,10 +422,9 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
             const Text("2. Show your hand sign to camera"),
             const Text("3. App speaks the detected sign"),
             const Text("4. Type or speak Roman Urdu words"),
-            const Text("5. If hands not detected, try rotation buttons"),
+            const Text("5. If no detection, try rotation buttons"),
             const SizedBox(height: 10),
-            const Text("Available signs:",
-                style: TextStyle(fontWeight: FontWeight.bold)),
+            const Text("Signs:", style: TextStyle(fontWeight: FontWeight.bold)),
             Wrap(spacing: 8,
                 children: signMap.keys.map((k) => Chip(label: Text(k))).toList()),
           ],
@@ -448,7 +454,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
       ),
       body: Column(children: [
 
-        // Camera preview
         Expanded(
           flex: 2,
           child: Container(
@@ -480,7 +485,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
           ),
         ),
 
-        // Detection result
         Container(
           margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
           padding: const EdgeInsets.all(12),
@@ -503,7 +507,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
           ]),
         ),
 
-        // Debug status
         Container(
           margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
@@ -519,7 +522,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
           ]),
         ),
 
-        // Rotation selector
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
           child: Row(children: [
@@ -530,7 +532,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
                 onTap: () {
                   setState(() => _rotation = r);
                   sequence.clear();
-                  print("Rotation → $r°");
                 },
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
@@ -549,7 +550,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
           ]),
         ),
 
-        // Text input
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
           child: Row(children: [
@@ -579,7 +579,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
           ]),
         ),
 
-        // Quick chips
         SizedBox(
           height: 48,
           child: ListView(
@@ -596,7 +595,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
           ),
         ),
 
-        // Control buttons
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
           child: Row(
@@ -661,10 +659,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     super.dispose();
   }
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// VideoScreen
-// ─────────────────────────────────────────────────────────────────────────────
 
 class VideoScreen extends StatefulWidget {
   final String path;
