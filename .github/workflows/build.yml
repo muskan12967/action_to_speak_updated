@@ -71,6 +71,20 @@ jobs:
           sed -i 's/targetSdk = [0-9]*/targetSdk = 36/' "$GRADLE"
           sed -i 's/compileSdk = flutter.compileSdkVersion/compileSdk = 36/' "$GRADLE"
           sed -i 's/compileSdk = [0-9]*/compileSdk = 36/' "$GRADLE"
+
+          # NEW: keep model.tflite uncompressed in the APK. Without this,
+          # the TFLite interpreter's mmap-based load throws
+          # "Invalid argument(s): Unable to create interpreter."
+          if [[ "$GRADLE" == *.kts ]]; then
+            if ! grep -q "noCompress" "$GRADLE"; then
+              sed -i '/^android {/a\    androidResources {\n        noCompress += listOf("tflite")\n    }' "$GRADLE"
+            fi
+          else
+            if ! grep -q "noCompress" "$GRADLE"; then
+              sed -i '/^android {/a\    aaptOptions {\n        noCompress "tflite"\n    }' "$GRADLE"
+            fi
+          fi
+
           echo "=== gradle ===" && cat "$GRADLE"
 
       - name: Add permissions to AndroidManifest
