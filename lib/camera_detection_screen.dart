@@ -23,16 +23,13 @@ import 'dart:math';
 // Original", which is a standard image-augmentation naming convention, not
 // a landmark-coordinate convention). No hand-keypoint extraction needed.
 //
-// ⚠️ THINGS TO VERIFY AGAINST YOUR ACTUAL model.tflite:
-//   1. INPUT SIZE — I default to 224x224. Check with:
-//        print(interpreter.getInputTensor(0).shape);
-//      and change ALPHABET_INPUT_SIZE below if it differs (e.g. 128, 160, 96).
-//   2. NORMALIZATION — I default to pixel/255.0 (0–1 range). If you trained
-//      with a preprocess_input that does mean-subtraction or -1..1 scaling
-//      (common with MobileNetV2/EfficientNet), change _normalizePixel below.
-//   3. INPUT DTYPE — I assume float32. If your interpreter expects uint8
-//      (quantized model), the whole tensor-building block needs a different
-//      buffer type — tell me and I'll adjust.
+// CONFIRMED from inspecting your actual model.tflite (urdu_sign_model_int8):
+//   INPUT:  shape [1, 224, 224, 3], dtype UINT8, scale=0.00392157 (1/255), zero_point=0
+//   OUTPUT: shape [1, 76],          dtype UINT8, scale=0.00390625 (1/256), zero_point=0
+// Since input scale is exactly 1/255 with zero_point 0, raw pixel bytes
+// (0-255) are fed directly as the quantized input — no float normalization.
+// Output quantization params are re-read from the interpreter at load time
+// as a safety net in case you ever swap in a different quantized model.
 // ─────────────────────────────────────────────────────────────────────────────
 
 class CameraDetectionScreen extends StatefulWidget {
@@ -64,7 +61,11 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   String _lastSpokenLetter = "";
   DateTime _lastSpokenAt = DateTime.now();
 
-  static const int ALPHABET_INPUT_SIZE = 224; // ⚠️ verify against your model
+  // Confirmed against urdu_sign_model_int8.tflite:
+  //   input:  [1,224,224,3] uint8, scale=0.00392157 (~1/255), zero_point=0
+  //   output: [1,76]        uint8, scale=0.00390625 (1/256),  zero_point=0
+  static const int ALPHABET_INPUT_SIZE = 224;
+  static const double OUTPUT_SCALE = 0.00390625; // dequantize: raw * scale
   static const int STABLE_FRAMES_NEEDED = 4;  // consecutive-agreement threshold
   static const double CONFIDENCE_THRESHOLD = 0.6;
   static const Duration SPEAK_COOLDOWN = Duration(milliseconds: 1500);
@@ -303,22 +304,28 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
         height: ALPHABET_INPUT_SIZE,
       );
 
-      final input = _imageToFloat32Tensor(resized);
+      // Model is uint8-quantized: input is raw 0-255 pixel bytes (no /255
+      // normalization — the quantization scale already accounts for that),
+      // output is also uint8 and needs dequantizing to get a real probability.
+      final input = _imageToUint8Tensor(resized);
       final output =
-          List.generate(1, (_) => List.filled(alphabetLabels.length, 0.0));
+          List.generate(1, (_) => List.filled(alphabetLabels.length, 0));
 
       interpreter!.run(input, output);
 
       int idx = 0;
-      double maxVal = output[0][0];
+      int maxRaw = output[0][0];
       for (int i = 1; i < alphabetLabels.length; i++) {
-        if (output[0][i] > maxVal) {
-          maxVal = output[0][i];
+        if (output[0][i] > maxRaw) {
+          maxRaw = output[0][i];
           idx = i;
         }
       }
 
-      _handlePrediction(alphabetLabels[idx], maxVal);
+      // Dequantize: output scale = 0.00390625 (1/256), zero_point = 0
+      final double confidence = maxRaw * OUTPUT_SCALE;
+
+      _handlePrediction(alphabetLabels[idx], confidence);
     } catch (e) {
       print("❌ Frame classification error: $e");
     }
@@ -422,10 +429,11 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     return out;
   }
 
-  // Builds a [1, SIZE, SIZE, 3] float32 tensor.
-  // ⚠️ If your model was trained with different normalization
-  // (e.g. mean-subtraction or -1..1 scaling), change _normalizePixel only.
-  List<List<List<List<double>>>> _imageToFloat32Tensor(img.Image image) {
+  // Builds a [1, SIZE, SIZE, 3] uint8 tensor of raw pixel values (0-255).
+  // Confirmed against the actual model: input dtype=uint8, scale≈1/255,
+  // zero_point=0 — that quantization mapping already IS "pixel/255", so we
+  // feed raw bytes directly rather than normalizing to a float 0-1 range.
+  List<List<List<List<int>>>> _imageToUint8Tensor(img.Image image) {
     return [
       List.generate(
         image.height,
@@ -434,17 +442,15 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
           (x) {
             final pixel = image.getPixel(x, y);
             return [
-              _normalizePixel(pixel.r.toDouble()),
-              _normalizePixel(pixel.g.toDouble()),
-              _normalizePixel(pixel.b.toDouble()),
+              pixel.r.toInt(),
+              pixel.g.toInt(),
+              pixel.b.toInt(),
             ];
           },
         ),
       ),
     ];
   }
-
-  double _normalizePixel(double value) => value / 255.0;
 
   // ── Text / voice input — UNCHANGED, still drives the word→video module ────
 
