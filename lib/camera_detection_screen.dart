@@ -177,7 +177,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     } catch (e) {
       setState(() {
         isModelLoaded = false;
-        modelStatus = "❌ Error: ${e.toString().substring(0, min(35, e.toString().length))}";
+        modelStatus = "❌ Error: ${e.toString().substring(0, min(150, e.toString().length))}";
       });
       print("❌ Error loading model: $e");
       _showModelErrorDialog();
