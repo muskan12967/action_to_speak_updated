@@ -101,22 +101,82 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   // ── Alphabet module: 76 classes from your labels JSON ─────────────────────
   // Index position in this list MUST match your model's output index order.
   final List<String> alphabetLabels = [
-    "1-Hay-Augmented", "1-Hay-Original", "2-Hay", "Ain-Augmented", "Ain-Original",
-    "Alif-Augmented", "Alif-Original", "Alifmad", "Aray", "Bay-Augmented",
-    "Bay-Original", "Byeh-Augmented", "Byeh-Original", "Chay-Augmented", "Chay-Original",
-    "Cyeh-Augmented", "Cyeh-Original", "Daal-Augmented", "Daal-Original", "Dal-Augmented",
-    "Dal-Original", "Dochahay-Augmented", "Dochahay-Original", "Fay-Augmented", "Fay-Original",
-    "Gaaf-Augmented", "Gaaf-Original", "Ghain-Augmented", "Ghain-Original", "Hamza-Augmented",
-    "Hamza-Original", "Jeem", "Kaf-Augmented", "Kaf-Original", "Khay-Augmented",
-    "Khay-Original", "Kiaf-Augmented", "Kiaf-Original", "Lam-Augmented", "Lam-Original",
-    "Meem-Augmented", "Meem-Original", "Nuun-Augmented", "Nuun-Original", "Nuungh-Augmented",
-    "Nuungh-Original", "Pay-Augmented", "Pay-Original", "Ray-Augmented", "Ray-Original",
-    "Say-Augmented", "Say-Original", "Seen-Augmented", "Seen-Original", "Sheen-Augmented",
-    "Sheen-Original", "Suad-Augmented", "Suad-Original", "Taay-Augmented", "Taay-Original",
-    "Tay-Augmented", "Tay-Original", "Tuey-Augmented", "Tuey-Original", "Wao-Augmented",
-    "Wao-Original", "Zaal-Augmented", "Zaal-Original", "Zaey-Augmented", "Zaey-Original",
-    "Zay-Augmented", "Zay-Original", "Zuad-Augmented", "Zuad-Original", "Zuey-Augmented",
-    "Zuey-Original",
+  "0": "1-Hay-Augmented",
+  "1": "1-Hay-Original",
+  "2": "2-Hay",
+  "3": "Ain-Augmented",
+  "4": "Ain-Original",
+  "5": "Alif-Augmented",
+  "6": "Alif-Original",
+  "7": "Alifmad",
+  "8": "Aray",
+  "9": "Bay-Augmented",
+  "10": "Bay-Original",
+  "11": "Byeh-Augmented",
+  "12": "Byeh-Original",
+  "13": "Chay-Augmented",
+  "14": "Chay-Original",
+  "15": "Cyeh-Augmented",
+  "16": "Cyeh-Original",
+  "17": "Daal-Augmented",
+  "18": "Daal-Original",
+  "19": "Dal-Augmented",
+  "20": "Dal-Original",
+  "21": "Dochahay-Augmented",
+  "22": "Dochahay-Original",
+  "23": "Fay-Augmented",
+  "24": "Fay-Original",
+  "25": "Gaaf-Augmented",
+  "26": "Gaaf-Original",
+  "27": "Ghain-Augmented",
+  "28": "Ghain-Original",
+  "29": "Hamza-Augmented",
+  "30": "Hamza-Original",
+  "31": "Jeem",
+  "32": "Kaf-Augmented",
+  "33": "Kaf-Original",
+  "34": "Khay-Augmented",
+  "35": "Khay-Original",
+  "36": "Kiaf-Augmented",
+  "37": "Kiaf-Original",
+  "38": "Lam-Augmented",
+  "39": "Lam-Original",
+  "40": "Meem-Augmented",
+  "41": "Meem-Original",
+  "42": "Nuun-Augmented",
+  "43": "Nuun-Original",
+  "44": "Nuungh-Augmented",
+  "45": "Nuungh-Original",
+  "46": "Pay-Augmented",
+  "47": "Pay-Original",
+  "48": "Ray-Augmented",
+  "49": "Ray-Original",
+  "50": "Say-Augmented",
+  "51": "Say-Original",
+  "52": "Seen-Augmented",
+  "53": "Seen-Original",
+  "54": "Sheen-Augmented",
+  "55": "Sheen-Original",
+  "56": "Suad-Augmented",
+  "57": "Suad-Original",
+  "58": "Taay-Augmented",
+  "59": "Taay-Original",
+  "60": "Tay-Augmented",
+  "61": "Tay-Original",
+  "62": "Tuey-Augmented",
+  "63": "Tuey-Original",
+  "64": "Wao-Augmented",
+  "65": "Wao-Original",
+  "66": "Zaal-Augmented",
+  "67": "Zaal-Original",
+  "68": "Zaey-Augmented",
+  "69": "Zaey-Original",
+  "70": "Zay-Augmented",
+  "71": "Zay-Original",
+  "72": "Zuad-Augmented",
+  "73": "Zuad-Original",
+  "74": "Zuey-Augmented",
+  "75": "Zuey-Original"
   ];
 
   // Strips "-Augmented" / "-Original" so both variants speak/display as the
@@ -433,25 +493,21 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   // Confirmed against the actual model: input dtype=uint8, scale≈1/255,
   // zero_point=0 — that quantization mapping already IS "pixel/255", so we
   // feed raw bytes directly rather than normalizing to a float 0-1 range.
-  List<List<List<List<int>>>> _imageToUint8Tensor(img.Image image) {
-    return [
-      List.generate(
-        image.height,
-        (y) => List.generate(
-          image.width,
-          (x) {
-            final pixel = image.getPixel(x, y);
-            return [
-              pixel.r.toInt(),
-              pixel.g.toInt(),
-              pixel.b.toInt(),
-            ];
-          },
-        ),
-      ),
-    ];
+  List<Uint8List> _imageToUint8Tensor(img.Image image) {
+  // Create a flat buffer for [1 * 224 * 224 * 3]
+  var input = Uint8List(1 * 224 * 224 * 3);
+  int offset = 0;
+  
+  for (int y = 0; y < 224; y++) {
+    for (int x = 0; x < 224; x++) {
+      final pixel = image.getPixel(x, y);
+      input[offset++] = pixel.r.toInt();
+      input[offset++] = pixel.g.toInt();
+      input[offset++] = pixel.b.toInt();
+    }
   }
-
+  return [input];
+}
   // ── Text / voice input — UNCHANGED, still drives the word→video module ────
 
   void handleTextInput(String text) {
