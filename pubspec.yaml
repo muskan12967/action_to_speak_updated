@@ -30,6 +30,7 @@ flutter:
   uses-material-design: true
   assets:
     - assets/model.tflite
+    - assets/label_map.json
     - assets/videos/book.mp4
     - assets/videos/friend.mp4
     - assets/videos/father.mp4
