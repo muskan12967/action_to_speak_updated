@@ -1,11 +1,14 @@
+import 'dart:convert';
+import 'dart:math';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show rootBundle;
 import 'package:camera/camera.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 import 'package:tflite_flutter/tflite_flutter.dart';
 import 'package:video_player/video_player.dart';
-import 'package:image/image.dart' as img; // ← NEW: for YUV->RGB + resize/normalize
-import 'dart:math';
+import 'package:hand_landmarker/hand_landmarker.dart'; // ← NEW: real-time hand landmark detection
 
 // ─────────────────────────────────────────────────────────────────────────────
 // pubspec.yaml dependencies needed:
@@ -14,22 +17,30 @@ import 'dart:math';
 //   speech_to_text: ^6.6.0
 //   tflite_flutter: ^0.10.4
 //   video_player: ^2.8.1
-//   image: ^4.1.3          ← NEW: pure-Dart image lib, used to convert each
-//                              camera YUV frame to RGB and resize/normalize
-//                              it for the alphabet classifier.
+//   hand_landmarker: ^2.2.0   ← NEW (replaces the old `image` package pipeline)
 //
-// REMOVED: hand_landmarker — the alphabet model is a static single-frame
-// image classifier (per your label names like "Alif-Augmented" / "Alif-
-// Original", which is a standard image-augmentation naming convention, not
-// a landmark-coordinate convention). No hand-keypoint extraction needed.
+// REMOVED: the `image` package + manual YUV->RGB + pixel-tensor conversion.
+// The alphabet model is now the LANDMARK-BASED classifier we trained
+// together (MediaPipe hand landmarks -> small NN), not the CNN pixel
+// classifier the previous version of this screen used. This is a genuinely
+// different model, so the whole classification path changes:
 //
-// CONFIRMED from inspecting your actual model.tflite (urdu_sign_model_int8):
-//   INPUT:  shape [1, 224, 224, 3], dtype UINT8, scale=0.00392157 (1/255), zero_point=0
-//   OUTPUT: shape [1, 76],          dtype UINT8, scale=0.00390625 (1/256), zero_point=0
-// Since input scale is exactly 1/255 with zero_point 0, raw pixel bytes
-// (0-255) are fed directly as the quantized input — no float normalization.
-// Output quantization params are re-read from the interpreter at load time
-// as a safety net in case you ever swap in a different quantized model.
+//   OLD: camera frame -> resize to 224x224 -> uint8 pixel tensor -> CNN -> 76 classes
+//   NEW: camera frame -> hand_landmarker (MediaPipe) -> 21 landmarks ->
+//        normalize (same math as training) -> 63-float tensor -> small NN
+//
+// ASSETS YOU NEED TO PLACE (from the Colab notebook output):
+//   assets/model.tflite   <- replace with our trained sign_model.tflite
+//   assets/labels.json    <- NEW, add this file (from the notebook output)
+//
+// Update pubspec.yaml's assets section to include both:
+//   assets:
+//     - assets/model.tflite
+//     - assets/labels.json
+//     - assets/videos/          (unchanged, for the word module)
+//
+// Requires JDK 17+ and minSdkVersion 24+ on the Android side (hand_landmarker
+// requirement) — check android/app/build.gradle if you hit a build error.
 // ─────────────────────────────────────────────────────────────────────────────
 
 class CameraDetectionScreen extends StatefulWidget {
@@ -41,6 +52,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
 
   CameraController? controller;
   Interpreter? interpreter;
+  HandLandmarkerPlugin? handPlugin; // ← NEW: MediaPipe hand landmark detector
 
   FlutterTts tts = FlutterTts();
   stt.SpeechToText speech = stt.SpeechToText();
@@ -56,24 +68,21 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   String modelStatus = "Loading model...";
 
   // ── Debounce state for alphabet predictions ───────────────────────────────
-  String? _lastRawPrediction;   // last frame's raw predicted label
-  int _sameStreak = 0;          // how many consecutive frames agreed
+  String? _lastRawPrediction;
+  int _sameStreak = 0;
   String _lastSpokenLetter = "";
   DateTime _lastSpokenAt = DateTime.now();
+  int _noHandFrames = 0; // consecutive frames with no hand detected
 
-  // Confirmed against urdu_sign_model_int8.tflite:
-  //   input:  [1,224,224,3] uint8, scale=0.00392157 (~1/255), zero_point=0
-  //   output: [1,76]        uint8, scale=0.00390625 (1/256),  zero_point=0
-  static const int ALPHABET_INPUT_SIZE = 224;
-  static const double OUTPUT_SCALE = 0.00390625; // dequantize: raw * scale
-  static const int STABLE_FRAMES_NEEDED = 4;  // consecutive-agreement threshold
+  static const int STABLE_FRAMES_NEEDED = 4;
   static const double CONFIDENCE_THRESHOLD = 0.6;
   static const Duration SPEAK_COOLDOWN = Duration(milliseconds: 1500);
+  static const int NO_HAND_RESET_FRAMES = 15; // allow re-speaking same letter after hand is hidden this long
 
   final TextEditingController textController = TextEditingController();
   final FocusNode textFocusNode = FocusNode();
 
-  // ── Word → video module (UNCHANGED) ───────────────────────────────────────
+  // ── Word → video module (UNCHANGED — do not touch) ────────────────────────
   final Map<String, String> signMap = {
     "baap":      "assets/videos/father.mp4",
     "dost":      "assets/videos/friend.mp4",
@@ -98,29 +107,12 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     "talibeilm": ["talibeilm", "student", "talib-e-ilam", "shagird"],
   };
 
-  // ── Alphabet module: 76 classes from your labels JSON ─────────────────────
-  // Index position in this list MUST match your model's output index order.
-  final List<String> alphabetLabels = [
-    "1-Hay-Augmented", "1-Hay-Original", "2-Hay", "Ain-Augmented", "Ain-Original",
-    "Alif-Augmented", "Alif-Original", "Alifmad", "Aray", "Bay-Augmented",
-    "Bay-Original", "Byeh-Augmented", "Byeh-Original", "Chay-Augmented", "Chay-Original",
-    "Cyeh-Augmented", "Cyeh-Original", "Daal-Augmented", "Daal-Original", "Dal-Augmented",
-    "Dal-Original", "Dochahay-Augmented", "Dochahay-Original", "Fay-Augmented", "Fay-Original",
-    "Gaaf-Augmented", "Gaaf-Original", "Ghain-Augmented", "Ghain-Original", "Hamza-Augmented",
-    "Hamza-Original", "Jeem", "Kaf-Augmented", "Kaf-Original", "Khay-Augmented",
-    "Khay-Original", "Kiaf-Augmented", "Kiaf-Original", "Lam-Augmented", "Lam-Original",
-    "Meem-Augmented", "Meem-Original", "Nuun-Augmented", "Nuun-Original", "Nuungh-Augmented",
-    "Nuungh-Original", "Pay-Augmented", "Pay-Original", "Ray-Augmented", "Ray-Original",
-    "Say-Augmented", "Say-Original", "Seen-Augmented", "Seen-Original", "Sheen-Augmented",
-    "Sheen-Original", "Suad-Augmented", "Suad-Original", "Taay-Augmented", "Taay-Original",
-    "Tay-Augmented", "Tay-Original", "Tuey-Augmented", "Tuey-Original", "Wao-Augmented",
-    "Wao-Original", "Zaal-Augmented", "Zaal-Original", "Zaey-Augmented", "Zaey-Original",
-    "Zay-Augmented", "Zay-Original", "Zuad-Augmented", "Zuad-Original", "Zuey-Augmented",
-    "Zuey-Original",
-  ];
+  // ── Alphabet module: labels now loaded from assets/labels.json ───────────
+  // (This replaces the old hardcoded 76-entry list. Whatever classes your
+  // trained model actually has will be loaded automatically at runtime.)
+  List<String> alphabetLabels = [];
 
-  // Strips "-Augmented" / "-Original" so both variants speak/display as the
-  // same clean letter name (e.g. "Alif-Augmented" -> "Alif").
+  // Harmless if your labels don't have these suffixes — only cleans them if present.
   String _cleanLabel(String raw) {
     return raw.replaceAll("-Augmented", "").replaceAll("-Original", "");
   }
@@ -128,7 +120,8 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   @override
   void initState() {
     super.initState();
-    loadModel();
+    loadLabelsAndModel();
+    initHandLandmarker();
     initTTS();
     initSpeech();
   }
@@ -150,9 +143,29 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     }
   }
 
-  Future loadModel() async {
+  // ── NEW: initialize the MediaPipe hand landmark detector ──────────────────
+  Future<void> initHandLandmarker() async {
+    try {
+      handPlugin = HandLandmarkerPlugin.create(
+        numHands: 1,
+        minHandDetectionConfidence: 0.6,
+        delegate: HandLandmarkerDelegate.gpu, // falls back to cpu if unsupported on device
+      );
+      print("✅ Hand landmarker ready");
+    } catch (e) {
+      print("❌ Error initializing hand landmarker: $e");
+      _showSnackBar("Hand tracker init failed: $e");
+    }
+  }
+
+  // ── CHANGED: loads labels.json + the landmark-based model.tflite ─────────
+  Future loadLabelsAndModel() async {
     try {
       setState(() => modelStatus = "Loading model...");
+
+      final labelsJsonStr = await rootBundle.loadString('assets/labels.json');
+      final List<dynamic> decoded = json.decode(labelsJsonStr);
+      alphabetLabels = decoded.map((e) => e.toString()).toList();
 
       interpreter = await Interpreter.fromAsset("assets/model.tflite");
 
@@ -161,25 +174,23 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
 
       setState(() {
         isModelLoaded = true;
-        modelStatus = "✅ Model ready!";
+        modelStatus = "✅ Model ready! (${alphabetLabels.length} classes)";
       });
 
-      print("✅ Model loaded successfully!");
-      print("Input  shape: $inputShape");
-      print("Output shape: $outputShape");
+      print("✅ Model + labels loaded successfully!");
+      print("Input  shape: $inputShape"); // expect [1, 63]
+      print("Output shape: $outputShape"); // expect [1, alphabetLabels.length]
 
-      // Heads-up if the real shape doesn't match our assumption.
-      if (outputShape.isNotEmpty &&
-          outputShape.last != alphabetLabels.length) {
+      if (outputShape.isNotEmpty && outputShape.last != alphabetLabels.length) {
         print("⚠️ WARNING: model outputs ${outputShape.last} classes but "
-            "alphabetLabels has ${alphabetLabels.length} entries — check order/count.");
+            "labels.json has ${alphabetLabels.length} entries — check they match.");
       }
     } catch (e) {
       setState(() {
         isModelLoaded = false;
         modelStatus = "❌ Error: ${e.toString().substring(0, min(150, e.toString().length))}";
       });
-      print("❌ Error loading model: $e");
+      print("❌ Error loading model/labels: $e");
       _showModelErrorDialog();
     }
   }
@@ -190,18 +201,18 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
         context: context,
         barrierDismissible: false,
         builder: (context) => AlertDialog(
-          title: const Text("Model File Missing"),
+          title: const Text("Model or Labels File Missing"),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: const [
-              Text("model.tflite not found!",
+              Text("model.tflite or labels.json not found!",
                   style: TextStyle(fontWeight: FontWeight.bold, color: Colors.red)),
               SizedBox(height: 10),
               Text("Please ensure:", style: TextStyle(fontWeight: FontWeight.bold)),
               SizedBox(height: 5),
-              Text("1. Copy 'model.tflite' to 'assets/' folder"),
-              Text("2. Update pubspec.yaml assets list to include it"),
+              Text("1. Copy both files into the 'assets/' folder"),
+              Text("2. Add both to pubspec.yaml's assets list"),
               Text("3. Run: flutter clean && flutter pub get"),
             ],
           ),
@@ -267,10 +278,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     }
   }
 
-  // ── CHANGED: per-frame static image classification ────────────────────────
-  // Throttled so we only ever have one frame being converted/classified at a
-  // time — YUV->RGB conversion + resize is real CPU work, unlike the old
-  // landmark-plugin path which handled that natively off the UI thread.
+  // ── CHANGED: per-frame landmark detection + classification ───────────────
   void startStream() {
     if (controller == null || isStreamActive || !isModelLoaded) return;
     isStreamActive = true;
@@ -288,46 +296,70 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   Future<void> _classifyFrame(
       CameraImage cameraImage, CameraDescription camera) async {
     try {
-      final rgbImage = _convertCameraImageToImage(cameraImage);
-      if (rgbImage == null) return;
+      if (handPlugin == null) return;
 
-      // Rotate to upright based on sensor orientation (front camera on most
-      // Android phones is 270 or 90 depending on device — adjust if your
-      // preview looks sideways/upside down during testing).
-      final rotated = camera.sensorOrientation == 0
-          ? rgbImage
-          : img.copyRotate(rgbImage, angle: camera.sensorOrientation);
+      // MediaPipe hand landmark detection (synchronous, on native thread)
+      final hands = handPlugin!.detect(cameraImage, camera.sensorOrientation);
 
-      final resized = img.copyResize(
-        rotated,
-        width: ALPHABET_INPUT_SIZE,
-        height: ALPHABET_INPUT_SIZE,
-      );
+      if (hands.isEmpty) {
+        _handleNoHand();
+        return;
+      }
 
-      // Model is uint8-quantized: input is raw 0-255 pixel bytes (no /255
-      // normalization — the quantization scale already accounts for that),
-      // output is also uint8 and needs dequantizing to get a real probability.
-      final input = _imageToUint8Tensor(resized);
-      final output =
-          List.generate(1, (_) => List.filled(alphabetLabels.length, 0));
+      _noHandFrames = 0;
+      final landmarks = hands.first.landmarks; // 21 points, normalized x/y/z
+      final features = _normalizeLandmarks(landmarks); // length-63 Float32List
+
+      final input = [features];
+      final output = List.generate(1, (_) => List.filled(alphabetLabels.length, 0.0));
 
       interpreter!.run(input, output);
 
       int idx = 0;
-      int maxRaw = output[0][0];
+      double maxProb = output[0][0];
       for (int i = 1; i < alphabetLabels.length; i++) {
-        if (output[0][i] > maxRaw) {
-          maxRaw = output[0][i];
+        if (output[0][i] > maxProb) {
+          maxProb = output[0][i];
           idx = i;
         }
       }
 
-      // Dequantize: output scale = 0.00390625 (1/256), zero_point = 0
-      final double confidence = maxRaw * OUTPUT_SCALE;
-
-      _handlePrediction(alphabetLabels[idx], confidence);
+      _handlePrediction(alphabetLabels[idx], maxProb);
     } catch (e) {
       print("❌ Frame classification error: $e");
+    }
+  }
+
+  // Must exactly match normalize_landmarks() from the Python training script:
+  // translate so wrist (landmark 0) is the origin, then scale so the
+  // wrist -> middle-finger-MCP (landmark 9) distance is 1.0.
+  Float32List _normalizeLandmarks(List<Landmark> landmarks) {
+    final wrist = landmarks[0];
+    final coords = landmarks
+        .map((l) => [l.x - wrist.x, l.y - wrist.y, l.z - wrist.z])
+        .toList();
+
+    final mid = coords[9];
+    double scaleRef = sqrt(mid[0] * mid[0] + mid[1] * mid[1] + mid[2] * mid[2]);
+    if (scaleRef < 1e-6) scaleRef = 1e-6;
+
+    final flat = Float32List(63);
+    for (int i = 0; i < 21; i++) {
+      flat[i * 3 + 0] = coords[i][0] / scaleRef;
+      flat[i * 3 + 1] = coords[i][1] / scaleRef;
+      flat[i * 3 + 2] = coords[i][2] / scaleRef;
+    }
+    return flat;
+  }
+
+  void _handleNoHand() {
+    _sameStreak = 0;
+    _lastRawPrediction = null;
+    _noHandFrames++;
+    // After the hand's been away a while, allow the same letter to be spoken
+    // again the next time it's shown (mirrors the webcam test script logic).
+    if (_noHandFrames > NO_HAND_RESET_FRAMES) {
+      _lastSpokenLetter = "";
     }
   }
 
@@ -366,90 +398,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
       // NOTE: no _showVideo() call here on purpose — alphabets don't have
       // per-letter videos; only the word module below plays videos.
     }
-  }
-
-  // Converts a YUV_420_888 (Android) or BGRA8888 (iOS) CameraImage into an
-  // `image` package Image for resizing/normalizing.
-  img.Image? _convertCameraImageToImage(CameraImage cameraImage) {
-    try {
-      if (cameraImage.format.group == ImageFormatGroup.yuv420) {
-        return _convertYUV420(cameraImage);
-      } else if (cameraImage.format.group == ImageFormatGroup.bgra8888) {
-        return img.Image.fromBytes(
-          width: cameraImage.width,
-          height: cameraImage.height,
-          bytes: cameraImage.planes[0].bytes.buffer,
-          order: img.ChannelOrder.bgra,
-        );
-      }
-      print("Unsupported image format: ${cameraImage.format.group}");
-      return null;
-    } catch (e) {
-      print("Image conversion error: $e");
-      return null;
-    }
-  }
-
-  img.Image _convertYUV420(CameraImage cameraImage) {
-    final width = cameraImage.width;
-    final height = cameraImage.height;
-
-    final yPlane = cameraImage.planes[0];
-    final uPlane = cameraImage.planes[1];
-    final vPlane = cameraImage.planes[2];
-
-    final out = img.Image(width: width, height: height);
-
-    final int uvRowStride = uPlane.bytesPerRow;
-    final int uvPixelStride = uPlane.bytesPerPixel ?? 1;
-
-    for (int y = 0; y < height; y++) {
-      final int yRowOffset = y * yPlane.bytesPerRow;
-      final int uvRowOffset = (y >> 1) * uvRowStride;
-
-      for (int x = 0; x < width; x++) {
-        final int yIndex = yRowOffset + x;
-        final int uvIndex = uvRowOffset + (x >> 1) * uvPixelStride;
-
-        final yVal = yPlane.bytes[yIndex];
-        final uVal = uPlane.bytes[uvIndex];
-        final vVal = vPlane.bytes[uvIndex];
-
-        // Standard YUV -> RGB conversion
-        final int r = (yVal + 1.370705 * (vVal - 128)).round().clamp(0, 255);
-        final int g = (yVal - 0.337633 * (uVal - 128) - 0.698001 * (vVal - 128))
-            .round()
-            .clamp(0, 255);
-        final int b = (yVal + 1.732446 * (uVal - 128)).round().clamp(0, 255);
-
-        out.setPixelRgb(x, y, r, g, b);
-      }
-    }
-
-    return out;
-  }
-
-  // Builds a [1, SIZE, SIZE, 3] uint8 tensor of raw pixel values (0-255).
-  // Confirmed against the actual model: input dtype=uint8, scale≈1/255,
-  // zero_point=0 — that quantization mapping already IS "pixel/255", so we
-  // feed raw bytes directly rather than normalizing to a float 0-1 range.
-  List<List<List<List<int>>>> _imageToUint8Tensor(img.Image image) {
-    return [
-      List.generate(
-        image.height,
-        (y) => List.generate(
-          image.width,
-          (x) {
-            final pixel = image.getPixel(x, y);
-            return [
-              pixel.r.toInt(),
-              pixel.g.toInt(),
-              pixel.b.toInt(),
-            ];
-          },
-        ),
-      ),
-    ];
   }
 
   // ── Text / voice input — UNCHANGED, still drives the word→video module ────
@@ -783,6 +731,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   void dispose() {
     controller?.dispose();
     interpreter?.close();
+    handPlugin?.dispose(); // ← NEW: release native hand landmarker resources
     tts.stop();
     speech.stop();
     textController.dispose();
@@ -792,7 +741,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// VideoScreen — UNCHANGED (word → video module)
+// VideoScreen — UNCHANGED (word → video module, do not touch)
 // ─────────────────────────────────────────────────────────────────────────────
 
 class VideoScreen extends StatefulWidget {
