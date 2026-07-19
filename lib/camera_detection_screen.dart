@@ -167,7 +167,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
       final List<dynamic> decoded = json.decode(labelsJsonStr);
       alphabetLabels = decoded.map((e) => e.toString()).toList();
 
-      interpreter = await Interpreter.fromAsset("assets/model.tflite");
+      interpreter = await Interpreter.fromAsset("assets/sign_model.tflite");
 
       final inputShape = interpreter!.getInputTensor(0).shape;
       final outputShape = interpreter!.getOutputTensor(0).shape;
