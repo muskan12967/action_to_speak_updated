@@ -10,6 +10,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # NEW: rename the trained model asset so it matches what pubspec.yaml
+      # and the Dart code expect (assets/model.tflite). This is the fix for
+      # the "ls: cannot access 'assets/model.tflite': No such file or
+      # directory" failure — the committed file was sign_model.tflite.
+      - name: Prepare model asset
+        run: |
+          if [ -f "assets/sign_model.tflite" ] && [ ! -f "assets/model.tflite" ]; then
+            mv assets/sign_model.tflite assets/model.tflite
+            echo "Renamed assets/sign_model.tflite -> assets/model.tflite"
+          elif [ -f "assets/model.tflite" ]; then
+            echo "assets/model.tflite already present, nothing to do"
+          else
+            echo "ERROR: neither assets/sign_model.tflite nor assets/model.tflite found!"
+            ls -lh assets/
+            exit 1
+          fi
+
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
@@ -25,7 +42,7 @@ jobs:
       - name: Show repo contents
         run: |
           echo "=== assets/ ===" && ls -lh assets/
-          echo "=== sign_model.tflite ===" && ls -lh assets/sign_model.tflite
+          echo "=== model.tflite ===" && ls -lh assets/model.tflite
           echo "=== pubspec.yaml ===" && cat pubspec.yaml
 
       - name: Fix pubspec.yaml
@@ -34,7 +51,7 @@ jobs:
           sed -i 's/tflite_flutter:.*/tflite_flutter: 0.12.1/' pubspec.yaml
           grep -v "^\s*-\s*assets/" pubspec.yaml | grep -v "^\s*assets:" > /tmp/pubspec_clean.yaml
           cat /tmp/pubspec_clean.yaml > pubspec.yaml
-          sed -i 's/uses-material-design: true/uses-material-design: true\n  assets:\n    - assets\/model.tflite\n    - assets\/videos\/book.mp4\n    - assets\/videos\/friend.mp4\n    - assets\/videos\/father.mp4\n    - assets\/videos\/family.mp4\n    - assets\/videos\/student.mp4\n    - assets\/videos\/write.mp4\n    - assets\/videos\/mother.mp4\n    - assets\/videos\/read.mp4\n    - assets\/videos\/home.mp4/' pubspec.yaml
+          sed -i 's/uses-material-design: true/uses-material-design: true\n  assets:\n    - assets\/model.tflite\n    - assets\/labels.json\n    - assets\/videos\/book.mp4\n    - assets\/videos\/friend.mp4\n    - assets\/videos\/father.mp4\n    - assets\/videos\/family.mp4\n    - assets\/videos\/student.mp4\n    - assets\/videos\/write.mp4\n    - assets\/videos\/mother.mp4\n    - assets\/videos\/read.mp4\n    - assets\/videos\/home.mp4/' pubspec.yaml
           echo "=== pubspec after fix ===" && cat pubspec.yaml
           rm -f pubspec.lock
 
@@ -72,7 +89,7 @@ jobs:
           sed -i 's/compileSdk = flutter.compileSdkVersion/compileSdk = 36/' "$GRADLE"
           sed -i 's/compileSdk = [0-9]*/compileSdk = 36/' "$GRADLE"
 
-          # NEW: keep model.tflite uncompressed in the APK. Without this,
+          # keep model.tflite uncompressed in the APK. Without this,
           # the TFLite interpreter's mmap-based load throws
           # "Invalid argument(s): Unable to create interpreter."
           if [[ "$GRADLE" == *.kts ]]; then
@@ -98,6 +115,7 @@ jobs:
       - name: Final verify
         run: |
           echo "=== model.tflite ===" && ls -lh assets/model.tflite
+          echo "=== labels.json ===" && ls -lh assets/labels.json
           echo "=== assets in pubspec ===" && grep -A 15 "assets:" pubspec.yaml
           echo "=== all assets ===" && find assets/ -type f | sort
 
