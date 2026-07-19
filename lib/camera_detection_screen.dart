@@ -110,7 +110,25 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   // ── Alphabet module: labels now loaded from assets/labels.json ───────────
   // (This replaces the old hardcoded 76-entry list. Whatever classes your
   // trained model actually has will be loaded automatically at runtime.)
-  List<String> alphabetLabels = [];
+  List<String> alphabetLabels = [
+  "1-Hay-Augmented",
+  "1-Hay-Original",
+  "Ain-Augmented",
+  "Ain-Original",
+  "Alif-Augmented",
+  "Alif-Original",
+  "Bay-Augmented",
+  "Bay-Original",
+  "Byeh-Augmented",
+  "Byeh-Original",
+  "Chay-Augmented",
+  "Chay-Original",
+  "Cyeh-Augmented",
+  "Cyeh-Original",
+  "Daal-Augmented",
+  "Daal-Original",
+  "Dal-Augmented"
+  ];
 
   // Harmless if your labels don't have these suffixes — only cleans them if present.
   String _cleanLabel(String raw) {
@@ -167,7 +185,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
       final List<dynamic> decoded = json.decode(labelsJsonStr);
       alphabetLabels = decoded.map((e) => e.toString()).toList();
 
-      interpreter = await Interpreter.fromAsset("assets/sign_model.tflite");
+      interpreter = await Interpreter.fromAsset("assets/model.tflite");
 
       final inputShape = interpreter!.getInputTensor(0).shape;
       final outputShape = interpreter!.getOutputTensor(0).shape;
