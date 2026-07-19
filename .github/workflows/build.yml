@@ -25,7 +25,7 @@ jobs:
       - name: Show repo contents
         run: |
           echo "=== assets/ ===" && ls -lh assets/
-          echo "=== model.tflite ===" && ls -lh assets/model.tflite
+          echo "=== sign_model.tflite ===" && ls -lh assets/sign_model.tflite
           echo "=== pubspec.yaml ===" && cat pubspec.yaml
 
       - name: Fix pubspec.yaml
