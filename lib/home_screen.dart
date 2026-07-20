@@ -126,18 +126,19 @@ class HomeScreen extends StatelessWidget {
                   // Lottie Animation
                   Center(
                     child: Container(
-                      padding: EdgeInsets.all(20),
-                      decoration: BoxDecoration(
-                        color: Colors.white.withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(30),
-                      ),
-                      child: Lottie.network(
-                        "https://assets2.lottiefiles.com/packages/lf20_jcikwtux.json",
-                        height: 200,
-                        width: 200,
-                      ),
-                    ),
-                  ),
+                     padding: EdgeInsets.all(20),
+                     decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(30),
+    ),
+    child: Image.asset(
+      "assets/logo.png",
+      height: 200,
+      width: 200,
+      fit: BoxFit.contain,
+    ),
+  ),
+),
 
                   SizedBox(height: 20),
 
