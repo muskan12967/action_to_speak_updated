@@ -31,6 +31,7 @@ flutter:
   assets:
     - assets/model.tflite
     - assets/labels.json
+    - assets/logo.png
     - assets/videos/book.mp4
     - assets/videos/friend.mp4
     - assets/videos/father.mp4
