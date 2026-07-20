@@ -8,39 +8,26 @@ import 'package:flutter_tts/flutter_tts.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 import 'package:tflite_flutter/tflite_flutter.dart';
 import 'package:video_player/video_player.dart';
-import 'package:hand_landmarker/hand_landmarker.dart'; // ← NEW: real-time hand landmark detection
+import 'package:hand_landmarker/hand_landmarker.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // pubspec.yaml dependencies needed:
-//   camera: ^0.10.5+9
+//   camera: ^0.11.4
 //   flutter_tts: ^3.8.5
-//   speech_to_text: ^6.6.0
-//   tflite_flutter: ^0.10.4
-//   video_player: ^2.8.1
-//   hand_landmarker: ^2.2.0   ← NEW (replaces the old `image` package pipeline)
+//   speech_to_text: ^7.0.0
+//   tflite_flutter: ^0.12.1
+//   video_player: ^2.8.2
+//   hand_landmarker: ^2.2.0
 //
-// REMOVED: the `image` package + manual YUV->RGB + pixel-tensor conversion.
-// The alphabet model is now the LANDMARK-BASED classifier we trained
-// together (MediaPipe hand landmarks -> small NN), not the CNN pixel
-// classifier the previous version of this screen used. This is a genuinely
-// different model, so the whole classification path changes:
+// ASSETS: assets/model.tflite + assets/labels.json (must both be listed in
+// pubspec.yaml's assets section, using the exact filename you actually
+// committed — "model.tflite", not "sign_model.tflite").
 //
-//   OLD: camera frame -> resize to 224x224 -> uint8 pixel tensor -> CNN -> 76 classes
-//   NEW: camera frame -> hand_landmarker (MediaPipe) -> 21 landmarks ->
-//        normalize (same math as training) -> 63-float tensor -> small NN
-//
-// ASSETS YOU NEED TO PLACE (from the Colab notebook output):
-//   assets/model.tflite   <- replace with our trained sign_model.tflite
-//   assets/labels.json    <- NEW, add this file (from the notebook output)
-//
-// Update pubspec.yaml's assets section to include both:
-//   assets:
-//     - assets/model.tflite
-//     - assets/labels.json
-//     - assets/videos/          (unchanged, for the word module)
-//
-// Requires JDK 17+ and minSdkVersion 24+ on the Android side (hand_landmarker
-// requirement) — check android/app/build.gradle if you hit a build error.
+// IMPORTANT: the camera-detection bug you were chasing was NOT in this file
+// — it was dead code in main.dart that silently grabbed the camera at app
+// startup and never released it, conflicting with this screen's own camera
+// controller. That's fixed separately in the updated main.dart. This file
+// only has the new "sign not recognized" feature added below.
 // ─────────────────────────────────────────────────────────────────────────────
 
 class CameraDetectionScreen extends StatefulWidget {
@@ -52,7 +39,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
 
   CameraController? controller;
   Interpreter? interpreter;
-  HandLandmarkerPlugin? handPlugin; // ← NEW: MediaPipe hand landmark detector
+  HandLandmarkerPlugin? handPlugin;
 
   FlutterTts tts = FlutterTts();
   stt.SpeechToText speech = stt.SpeechToText();
@@ -60,7 +47,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   bool isCameraOn = false;
   bool isStreamActive = false;
   bool isModelLoaded = false;
-  bool isProcessingFrame = false; // throttle: only one frame in flight at a time
+  bool isProcessingFrame = false;
   bool isListening = false;
 
   String detectedText = "";
@@ -72,12 +59,22 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   int _sameStreak = 0;
   String _lastSpokenLetter = "";
   DateTime _lastSpokenAt = DateTime.now();
-  int _noHandFrames = 0; // consecutive frames with no hand detected
+  int _noHandFrames = 0;
+
+  // ── NEW: "sign not recognized" state ──────────────────────────────────────
+  int _unknownStreak = 0;
+  bool _unknownAnnounced = false;
+  DateTime _lastUnknownAnnouncedAt = DateTime.now();
 
   static const int STABLE_FRAMES_NEEDED = 4;
   static const double CONFIDENCE_THRESHOLD = 0.6;
   static const Duration SPEAK_COOLDOWN = Duration(milliseconds: 1500);
-  static const int NO_HAND_RESET_FRAMES = 15; // allow re-speaking same letter after hand is hidden this long
+  static const int NO_HAND_RESET_FRAMES = 15;
+
+  // NEW: how many consecutive low-confidence frames (hand present, but not
+  // matching any trained sign) before we announce "sign not recognized".
+  static const int UNKNOWN_STREAK_NEEDED = 15;
+  static const Duration UNKNOWN_ANNOUNCE_COOLDOWN = Duration(seconds: 3);
 
   final TextEditingController textController = TextEditingController();
   final FocusNode textFocusNode = FocusNode();
@@ -107,30 +104,9 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     "talibeilm": ["talibeilm", "student", "talib-e-ilam", "shagird"],
   };
 
-  // ── Alphabet module: labels now loaded from assets/labels.json ───────────
-  // (This replaces the old hardcoded 76-entry list. Whatever classes your
-  // trained model actually has will be loaded automatically at runtime.)
-  List<String> alphabetLabels = [
-  "1-Hay-Augmented",
-  "1-Hay-Original",
-  "Ain-Augmented",
-  "Ain-Original",
-  "Alif-Augmented",
-  "Alif-Original",
-  "Bay-Augmented",
-  "Bay-Original",
-  "Byeh-Augmented",
-  "Byeh-Original",
-  "Chay-Augmented",
-  "Chay-Original",
-  "Cyeh-Augmented",
-  "Cyeh-Original",
-  "Daal-Augmented",
-  "Daal-Original",
-  "Dal-Augmented"
-  ];
+  // ── Alphabet module: labels loaded from assets/labels.json ───────────────
+  List<String> alphabetLabels = [];
 
-  // Harmless if your labels don't have these suffixes — only cleans them if present.
   String _cleanLabel(String raw) {
     return raw.replaceAll("-Augmented", "").replaceAll("-Original", "");
   }
@@ -161,13 +137,12 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     }
   }
 
-  // ── NEW: initialize the MediaPipe hand landmark detector ──────────────────
   Future<void> initHandLandmarker() async {
     try {
       handPlugin = HandLandmarkerPlugin.create(
         numHands: 1,
         minHandDetectionConfidence: 0.6,
-        delegate: HandLandmarkerDelegate.gpu, // falls back to cpu if unsupported on device
+        delegate: HandLandmarkerDelegate.gpu,
       );
       print("✅ Hand landmarker ready");
     } catch (e) {
@@ -176,7 +151,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     }
   }
 
-  // ── CHANGED: loads labels.json + the landmark-based model.tflite ─────────
   Future loadLabelsAndModel() async {
     try {
       setState(() => modelStatus = "Loading model...");
@@ -296,7 +270,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     }
   }
 
-  // ── CHANGED: per-frame landmark detection + classification ───────────────
   void startStream() {
     if (controller == null || isStreamActive || !isModelLoaded) return;
     isStreamActive = true;
@@ -316,7 +289,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     try {
       if (handPlugin == null) return;
 
-      // MediaPipe hand landmark detection (synchronous, on native thread)
       final hands = handPlugin!.detect(cameraImage, camera.sensorOrientation);
 
       if (hands.isEmpty) {
@@ -325,8 +297,8 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
       }
 
       _noHandFrames = 0;
-      final landmarks = hands.first.landmarks; // 21 points, normalized x/y/z
-      final features = _normalizeLandmarks(landmarks); // length-63 Float32List
+      final landmarks = hands.first.landmarks;
+      final features = _normalizeLandmarks(landmarks);
 
       final input = [features];
       final output = List.generate(1, (_) => List.filled(alphabetLabels.length, 0.0));
@@ -348,9 +320,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     }
   }
 
-  // Must exactly match normalize_landmarks() from the Python training script:
-  // translate so wrist (landmark 0) is the origin, then scale so the
-  // wrist -> middle-finger-MCP (landmark 9) distance is 1.0.
   Float32List _normalizeLandmarks(List<Landmark> landmarks) {
     final wrist = landmarks[0];
     final coords = landmarks
@@ -374,11 +343,13 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     _sameStreak = 0;
     _lastRawPrediction = null;
     _noHandFrames++;
-    // After the hand's been away a while, allow the same letter to be spoken
-    // again the next time it's shown (mirrors the webcam test script logic).
     if (_noHandFrames > NO_HAND_RESET_FRAMES) {
       _lastSpokenLetter = "";
     }
+    // NEW: also reset "unknown sign" tracking once the hand is gone — no
+    // hand in frame just means nothing is being shown, not an unknown sign.
+    _unknownStreak = 0;
+    _unknownAnnounced = false;
   }
 
   // Debounce: require several consecutive frames to agree before speaking,
@@ -387,8 +358,33 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     if (confidence < CONFIDENCE_THRESHOLD) {
       _sameStreak = 0;
       _lastRawPrediction = null;
+
+      // ── NEW: "sign not recognized" handling ─────────────────────────────
+      // A hand IS in frame (we only reach here when one is), but the model
+      // isn't confident it matches any trained class. If this persists,
+      // tell the user instead of staying silent.
+      _unknownStreak++;
+      final cooledDown =
+          DateTime.now().difference(_lastUnknownAnnouncedAt) > UNKNOWN_ANNOUNCE_COOLDOWN;
+
+      if (_unknownStreak >= UNKNOWN_STREAK_NEEDED &&
+          (!_unknownAnnounced || cooledDown)) {
+        _unknownAnnounced = true;
+        _lastUnknownAnnouncedAt = DateTime.now();
+        _lastSpokenLetter = ""; // so a real sign right after still gets spoken
+
+        if (mounted) {
+          setState(() => detectedText = "Sign not recognized ❓");
+        }
+        print("⚠️ Unknown sign (best confidence: ${confidence.toStringAsFixed(3)})");
+        tts.speak("This sign is not recognized");
+      }
       return;
     }
+
+    // Confident match found — clear the "unknown" tracking.
+    _unknownStreak = 0;
+    _unknownAnnounced = false;
 
     if (rawLabel == _lastRawPrediction) {
       _sameStreak++;
@@ -413,8 +409,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
 
       print("✅ ALPHABET DETECTED: $cleanLetter (confidence: ${confidence.toStringAsFixed(3)})");
       tts.speak(cleanLetter);
-      // NOTE: no _showVideo() call here on purpose — alphabets don't have
-      // per-letter videos; only the word module below plays videos.
     }
   }
 
@@ -749,7 +743,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   void dispose() {
     controller?.dispose();
     interpreter?.close();
-    handPlugin?.dispose(); // ← NEW: release native hand landmarker resources
+    handPlugin?.dispose();
     tts.stop();
     speech.stop();
     textController.dispose();
