@@ -29,7 +29,7 @@ dev_dependencies:
 flutter:
   uses-material-design: true
   assets:
-    - assets/sign_model.tflite
+    - assets/model.tflite
     - assets/labels.json
     - assets/videos/book.mp4
     - assets/videos/friend.mp4
