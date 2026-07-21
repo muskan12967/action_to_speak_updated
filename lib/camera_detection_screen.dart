@@ -298,7 +298,13 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
 
       _noHandFrames = 0;
       final landmarks = hands.first.landmarks;
-      final features = _normalizeLandmarks(landmarks, mirrorX: false);
+
+      // FIX: Android's front camera commonly delivers mirrored frames to the
+      // image stream (this is a well-documented Android/Flutter camera
+      // behavior). Your training data was captured normally (non-mirrored),
+      // so live landmarks need to be un-mirrored to match what the model
+      // actually learned. This is now the default.
+      final features = _normalizeLandmarks(landmarks, mirrorX: true);
 
       final input = [features];
       final output = List.generate(1, (_) => List.filled(alphabetLabels.length, 0.0));
@@ -314,24 +320,23 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
         }
       }
 
-      // ── DIAGNOSTIC ONLY: also run the mirrored version and log both side
-      // by side. This does NOT affect what's shown/spoken — it's purely to
-      // find out whether a left-right mirror mismatch between training and
-      // live camera frames is causing wrong predictions. Remove this whole
-      // block once we've confirmed which orientation is correct.
-      final mirroredFeatures = _normalizeLandmarks(landmarks, mirrorX: true);
-      final mirroredOutput = List.generate(1, (_) => List.filled(alphabetLabels.length, 0.0));
-      interpreter!.run([mirroredFeatures], mirroredOutput);
-      int mIdx = 0;
-      double mMaxProb = mirroredOutput[0][0];
+      // Diagnostic log kept so you can still visually confirm this is the
+      // right call — "Now using (mirrored)" should show noticeably higher
+      // confidence / more sensible letters than "Non-mirrored" if this fix
+      // is correct for your device.
+      final nonMirrored = _normalizeLandmarks(landmarks, mirrorX: false);
+      final nonMirroredOutput = List.generate(1, (_) => List.filled(alphabetLabels.length, 0.0));
+      interpreter!.run([nonMirrored], nonMirroredOutput);
+      int nmIdx = 0;
+      double nmMaxProb = nonMirroredOutput[0][0];
       for (int i = 1; i < alphabetLabels.length; i++) {
-        if (mirroredOutput[0][i] > mMaxProb) {
-          mMaxProb = mirroredOutput[0][i];
-          mIdx = i;
+        if (nonMirroredOutput[0][i] > nmMaxProb) {
+          nmMaxProb = nonMirroredOutput[0][i];
+          nmIdx = i;
         }
       }
-      print("🔍 DIAGNOSTIC — Normal: ${alphabetLabels[idx]} (${maxProb.toStringAsFixed(2)})"
-          "  |  Mirrored: ${alphabetLabels[mIdx]} (${mMaxProb.toStringAsFixed(2)})");
+      print("🔍 Now using (mirrored): ${alphabetLabels[idx]} (${maxProb.toStringAsFixed(2)})"
+          "  |  Non-mirrored would be: ${alphabetLabels[nmIdx]} (${nmMaxProb.toStringAsFixed(2)})");
 
       _handlePrediction(alphabetLabels[idx], maxProb);
     } catch (e) {
