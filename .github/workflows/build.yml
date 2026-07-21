@@ -51,7 +51,7 @@ jobs:
           sed -i 's/tflite_flutter:.*/tflite_flutter: 0.12.1/' pubspec.yaml
           grep -v "^\s*-\s*assets/" pubspec.yaml | grep -v "^\s*assets:" > /tmp/pubspec_clean.yaml
           cat /tmp/pubspec_clean.yaml > pubspec.yaml
-          sed -i 's/uses-material-design: true/uses-material-design: true\n  assets:\n    - assets\/model.tflite\n    - assets\/labels.json\n    - assets\/videos\/book.mp4\n    - assets\/videos\/friend.mp4\n    - assets\/videos\/father.mp4\n    - assets\/videos\/family.mp4\n    - assets\/videos\/student.mp4\n    - assets\/videos\/write.mp4\n    - assets\/videos\/mother.mp4\n    - assets\/videos\/read.mp4\n    - assets\/videos\/home.mp4/' pubspec.yaml
+          sed -i 's/uses-material-design: true/uses-material-design: true\n  assets:\n    - assets\/model.tflite\n    - assets\/labels.json\n    - assets\/logo.png\n    - assets\/videos\/book.mp4\n    - assets\/videos\/friend.mp4\n    - assets\/videos\/father.mp4\n    - assets\/videos\/family.mp4\n    - assets\/videos\/student.mp4\n    - assets\/videos\/write.mp4\n    - assets\/videos\/mother.mp4\n    - assets\/videos\/read.mp4\n    - assets\/videos\/home.mp4/' pubspec.yaml
           echo "=== pubspec after fix ===" && cat pubspec.yaml
           rm -f pubspec.lock
 
