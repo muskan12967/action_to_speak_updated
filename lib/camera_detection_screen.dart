@@ -9,9 +9,10 @@ import 'package:speech_to_text/speech_to_text.dart' as stt;
 import 'package:tflite_flutter/tflite_flutter.dart';
 import 'package:video_player/video_player.dart';
 import 'package:hand_landmarker/hand_landmarker.dart';
-  @override
+class CameraDetectionScreen extends StatefulWidget {
+  @override 
   State<CameraDetectionScreen> createState() => _CameraDetectionScreenState();
-}
+} 
 
 class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
 
