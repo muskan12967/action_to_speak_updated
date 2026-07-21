@@ -298,7 +298,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
 
       _noHandFrames = 0;
       final landmarks = hands.first.landmarks;
-      final features = _normalizeLandmarks(landmarks);
+      final features = _normalizeLandmarks(landmarks, mirrorX: false);
 
       final input = [features];
       final output = List.generate(1, (_) => List.filled(alphabetLabels.length, 0.0));
@@ -314,16 +314,39 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
         }
       }
 
+      // ── DIAGNOSTIC ONLY: also run the mirrored version and log both side
+      // by side. This does NOT affect what's shown/spoken — it's purely to
+      // find out whether a left-right mirror mismatch between training and
+      // live camera frames is causing wrong predictions. Remove this whole
+      // block once we've confirmed which orientation is correct.
+      final mirroredFeatures = _normalizeLandmarks(landmarks, mirrorX: true);
+      final mirroredOutput = List.generate(1, (_) => List.filled(alphabetLabels.length, 0.0));
+      interpreter!.run([mirroredFeatures], mirroredOutput);
+      int mIdx = 0;
+      double mMaxProb = mirroredOutput[0][0];
+      for (int i = 1; i < alphabetLabels.length; i++) {
+        if (mirroredOutput[0][i] > mMaxProb) {
+          mMaxProb = mirroredOutput[0][i];
+          mIdx = i;
+        }
+      }
+      print("🔍 DIAGNOSTIC — Normal: ${alphabetLabels[idx]} (${maxProb.toStringAsFixed(2)})"
+          "  |  Mirrored: ${alphabetLabels[mIdx]} (${mMaxProb.toStringAsFixed(2)})");
+
       _handlePrediction(alphabetLabels[idx], maxProb);
     } catch (e) {
       print("❌ Frame classification error: $e");
     }
   }
 
-  Float32List _normalizeLandmarks(List<Landmark> landmarks) {
+  Float32List _normalizeLandmarks(List<Landmark> landmarks, {bool mirrorX = false}) {
     final wrist = landmarks[0];
     final coords = landmarks
-        .map((l) => [l.x - wrist.x, l.y - wrist.y, l.z - wrist.z])
+        .map((l) => [
+              mirrorX ? -(l.x - wrist.x) : (l.x - wrist.x),
+              l.y - wrist.y,
+              l.z - wrist.z,
+            ])
         .toList();
 
     final mid = coords[9];
