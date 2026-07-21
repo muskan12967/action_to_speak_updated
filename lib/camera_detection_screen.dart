@@ -9,28 +9,6 @@ import 'package:speech_to_text/speech_to_text.dart' as stt;
 import 'package:tflite_flutter/tflite_flutter.dart';
 import 'package:video_player/video_player.dart';
 import 'package:hand_landmarker/hand_landmarker.dart';
-
-// ─────────────────────────────────────────────────────────────────────────────
-// pubspec.yaml dependencies needed:
-//   camera: ^0.11.4
-//   flutter_tts: ^3.8.5
-//   speech_to_text: ^7.0.0
-//   tflite_flutter: ^0.12.1
-//   video_player: ^2.8.2
-//   hand_landmarker: ^2.2.0
-//
-// ASSETS: assets/model.tflite + assets/labels.json (must both be listed in
-// pubspec.yaml's assets section, using the exact filename you actually
-// committed — "model.tflite", not "sign_model.tflite").
-//
-// IMPORTANT: the camera-detection bug you were chasing was NOT in this file
-// — it was dead code in main.dart that silently grabbed the camera at app
-// startup and never released it, conflicting with this screen's own camera
-// controller. That's fixed separately in the updated main.dart. This file
-// only has the new "sign not recognized" feature added below.
-// ─────────────────────────────────────────────────────────────────────────────
-
-class CameraDetectionScreen extends StatefulWidget {
   @override
   State<CameraDetectionScreen> createState() => _CameraDetectionScreenState();
 }
@@ -54,14 +32,14 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   String micStatus = "Mic off";
   String modelStatus = "Loading model...";
 
-  // ── Debounce state for alphabet predictions ───────────────────────────────
+  // Debounce state for alphabet predictions
   String? _lastRawPrediction;
   int _sameStreak = 0;
   String _lastSpokenLetter = "";
   DateTime _lastSpokenAt = DateTime.now();
   int _noHandFrames = 0;
 
-  // ── NEW: "sign not recognized" state ──────────────────────────────────────
+  //"sign not recognized" 
   int _unknownStreak = 0;
   bool _unknownAnnounced = false;
   DateTime _lastUnknownAnnouncedAt = DateTime.now();
@@ -71,7 +49,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   static const Duration SPEAK_COOLDOWN = Duration(milliseconds: 1500);
   static const int NO_HAND_RESET_FRAMES = 15;
 
-  // NEW: how many consecutive low-confidence frames (hand present, but not
+  //  how many consecutive low-confidence frames (hand present, but not
   // matching any trained sign) before we announce "sign not recognized".
   static const int UNKNOWN_STREAK_NEEDED = 15;
   static const Duration UNKNOWN_ANNOUNCE_COOLDOWN = Duration(seconds: 3);
@@ -79,7 +57,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   final TextEditingController textController = TextEditingController();
   final FocusNode textFocusNode = FocusNode();
 
-  // ── Word → video module (UNCHANGED — do not touch) ────────────────────────
+  //  Word → video module
   final Map<String, String> signMap = {
     "baap":      "assets/videos/father.mp4",
     "dost":      "assets/videos/friend.mp4",
@@ -104,7 +82,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     "talibeilm": ["talibeilm", "student", "talib-e-ilam", "shagird"],
   };
 
-  // ── Alphabet module: labels loaded from assets/labels.json ───────────────
+  //  Alphabet module: labels loaded from assets/labels.json 
   List<String> alphabetLabels = [];
 
   String _cleanLabel(String raw) {
@@ -219,7 +197,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     });
   }
 
-  // ── Camera helpers ─────────────────────────────────────────────────────────
+  //  Camera helpers
 
   Future initCamera() async {
     if (!isModelLoaded) {
@@ -298,12 +276,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
 
       _noHandFrames = 0;
       final landmarks = hands.first.landmarks;
-
-      // FIX: Android's front camera commonly delivers mirrored frames to the
-      // image stream (this is a well-documented Android/Flutter camera
-      // behavior). Your training data was captured normally (non-mirrored),
-      // so live landmarks need to be un-mirrored to match what the model
-      // actually learned. This is now the default.
       final features = _normalizeLandmarks(landmarks, mirrorX: true);
 
       final input = [features];
@@ -319,11 +291,6 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
           idx = i;
         }
       }
-
-      // Diagnostic log kept so you can still visually confirm this is the
-      // right call — "Now using (mirrored)" should show noticeably higher
-      // confidence / more sensible letters than "Non-mirrored" if this fix
-      // is correct for your device.
       final nonMirrored = _normalizeLandmarks(landmarks, mirrorX: false);
       final nonMirroredOutput = List.generate(1, (_) => List.filled(alphabetLabels.length, 0.0));
       interpreter!.run([nonMirrored], nonMirroredOutput);
@@ -374,20 +341,20 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     if (_noHandFrames > NO_HAND_RESET_FRAMES) {
       _lastSpokenLetter = "";
     }
-    // NEW: also reset "unknown sign" tracking once the hand is gone — no
+    // also reset "unknown sign" tracking once the hand is gone no
     // hand in frame just means nothing is being shown, not an unknown sign.
     _unknownStreak = 0;
     _unknownAnnounced = false;
   }
 
-  // Debounce: require several consecutive frames to agree before speaking,
+  // require several consecutive frames to agree before speaking,
   // so a fleeting misread doesn't get announced.
   void _handlePrediction(String rawLabel, double confidence) {
     if (confidence < CONFIDENCE_THRESHOLD) {
       _sameStreak = 0;
       _lastRawPrediction = null;
 
-      // ── NEW: "sign not recognized" handling ─────────────────────────────
+      // "sign not recognized" handling
       // A hand IS in frame (we only reach here when one is), but the model
       // isn't confident it matches any trained class. If this persists,
       // tell the user instead of staying silent.
@@ -410,7 +377,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
       return;
     }
 
-    // Confident match found — clear the "unknown" tracking.
+    // Confident match found  clear the "unknown" tracking.
     _unknownStreak = 0;
     _unknownAnnounced = false;
 
@@ -440,7 +407,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     }
   }
 
-  // ── Text / voice input — UNCHANGED, still drives the word→video module ────
+  // ─ Text / voice input  still drives the word→video module 
 
   void handleTextInput(String text) {
     final input = text.toLowerCase().trim();
@@ -550,7 +517,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     );
   }
 
-  // ── UI — UNCHANGED ───────────────────────────────────────────────────────
+  //  UI
 
   @override
   Widget build(BuildContext context) {
@@ -765,7 +732,7 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
     );
   }
 
-  // ── Dispose ────────────────────────────────────────────────────────────────
+  //  Dispose
 
   @override
   void dispose() {
@@ -780,9 +747,8 @@ class _CameraDetectionScreenState extends State<CameraDetectionScreen> {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// VideoScreen — UNCHANGED (word → video module, do not touch)
-// ─────────────────────────────────────────────────────────────────────────────
+
+// VideoScreen
 
 class VideoScreen extends StatefulWidget {
   final String path;
